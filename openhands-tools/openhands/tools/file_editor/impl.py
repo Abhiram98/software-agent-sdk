@@ -6,6 +6,11 @@ from openhands.sdk.tool import ToolExecutor
 
 if TYPE_CHECKING:
     from openhands.sdk.conversation import LocalConversation
+from openhands.tools.edit_audit import (
+    conversation_audit_id,
+    is_file_edit_command,
+    log_file_edit,
+)
 from openhands.tools.file_editor.definition import (
     CommandLiteral,
     FileEditorAction,
@@ -17,6 +22,21 @@ from openhands.tools.file_editor.exceptions import ToolError
 
 # Module-global editor instance (lazily initialized in file_editor)
 _GLOBAL_EDITOR: FileEditor | None = None
+
+
+def _action_params(action: FileEditorAction) -> dict:
+    return {
+        key: value
+        for key, value in (
+            ("path", action.path),
+            ("file_text", action.file_text),
+            ("old_str", action.old_str),
+            ("new_str", action.new_str),
+            ("insert_line", action.insert_line),
+            ("view_range", action.view_range),
+        )
+        if value is not None
+    }
 
 
 class FileEditorExecutor(ToolExecutor):
@@ -37,12 +57,21 @@ class FileEditorExecutor(ToolExecutor):
     def __call__(
         self,
         action: FileEditorAction,
-        conversation: "LocalConversation | None" = None,  # noqa: ARG002
+        conversation: "LocalConversation | None" = None,
     ) -> FileEditorObservation:
+        conversation_id = conversation_audit_id(conversation)
         # Enforce allowed_edits_files restrictions
         if self.allowed_edits_files is not None and action.command != "view":
             action_path = Path(action.path).resolve()
             if action_path not in self.allowed_edits_files:
+                log_file_edit(
+                    tool="file_editor",
+                    command=action.command,
+                    paths=[action_path],
+                    status="blocked",
+                    conversation_id=conversation_id,
+                    params=_action_params(action),
+                )
                 return FileEditorObservation.from_text(
                     text=(
                         f"Operation '{action.command}' is not allowed "
@@ -70,6 +99,15 @@ class FileEditorExecutor(ToolExecutor):
                 text=e.message, command=action.command, is_error=True
             )
         assert result is not None, "file_editor should always return a result"
+        if is_file_edit_command(action.command):
+            log_file_edit(
+                tool="file_editor",
+                command=action.command,
+                paths=[Path(action.path).resolve()],
+                status="error" if result.is_error else "ok",
+                conversation_id=conversation_id,
+                params=_action_params(action),
+            )
         return result
 
 

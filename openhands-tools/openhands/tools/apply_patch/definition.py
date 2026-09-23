@@ -17,11 +17,17 @@ from openhands.sdk.tool import (
     register_tool,
 )
 from openhands.sdk.tool.tool import FunctionToolParam
+from openhands.tools.edit_audit import (
+    conversation_audit_id,
+    log_file_edit,
+    patch_target_paths,
+)
 
 from .core import Commit, DiffError, process_patch
 
 
 if TYPE_CHECKING:
+    from openhands.sdk.conversation import LocalConversation
     from openhands.sdk.conversation.state import ConversationState
 
 
@@ -84,9 +90,10 @@ class ApplyPatchExecutor(ToolExecutor[ApplyPatchAction, ApplyPatchObservation]):
     def __call__(
         self,
         action: ApplyPatchAction,
-        conversation=None,  # noqa: ARG002 - signature match
+        conversation: LocalConversation | None = None,
     ) -> ApplyPatchObservation:
         """Execute the patch application and return an observation."""
+        target_paths = patch_target_paths(action.patch, str(self.workspace_root))
 
         def open_file(path: str) -> str:
             fp = self._resolve_path(path)
@@ -115,9 +122,17 @@ class ApplyPatchExecutor(ToolExecutor[ApplyPatchAction, ApplyPatchObservation]):
                 obs = ApplyPatchObservation.from_text(
                     text=msg, message=msg, fuzz=fuzz, commit=commit, is_error=False
                 )
-            return obs
         except DiffError as e:
-            return ApplyPatchObservation.from_text(text=str(e), is_error=True)
+            obs = ApplyPatchObservation.from_text(text=str(e), is_error=True)
+        log_file_edit(
+            tool="apply_patch",
+            command="apply_patch",
+            paths=target_paths,
+            status="error" if obs.is_error else "ok",
+            conversation_id=conversation_audit_id(conversation),
+            params={"patch": action.patch},
+        )
+        return obs
 
 
 _DESCRIPTION = (
