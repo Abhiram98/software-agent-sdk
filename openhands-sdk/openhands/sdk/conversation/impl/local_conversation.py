@@ -18,6 +18,7 @@ from openhands.sdk.conversation.base import BaseConversation
 from openhands.sdk.conversation.cancellation import CancellationToken
 from openhands.sdk.conversation.event_store import EventLog
 from openhands.sdk.conversation.exceptions import ConversationRunError
+from openhands.sdk.conversation.refactoring_miner import mine_step_refactorings
 from openhands.sdk.conversation.secret_registry import SecretValue
 from openhands.sdk.conversation.state import (
     ConversationExecutionStatus,
@@ -311,6 +312,7 @@ class LocalConversation(BaseConversation):
         self._cancel_token = None
         self._prompt_cache_key = prompt_cache_key
         self._step_holds_state_lock = False
+        self._step_count = 0
 
         # Store plugin specs for lazy loading (no IO in constructor)
         # Plugins will be loaded on first run() or send_message() call
@@ -1994,6 +1996,8 @@ class LocalConversation(BaseConversation):
                     finally:
                         self._step_holds_state_lock = False
                     iteration += 1
+                    self._step_count += 1
+                    mine_step_refactorings(self, self._step_count)
 
                     # Check for non-finished terminal conditions
                     # Note: We intentionally do NOT check for FINISHED status here.
@@ -2253,6 +2257,10 @@ class LocalConversation(BaseConversation):
                         finally:
                             self._step_holds_state_lock = False
                         iteration += 1
+                        self._step_count += 1
+                        await asyncio.to_thread(
+                            mine_step_refactorings, self, self._step_count
+                        )
 
                         # astep releases the state lock for the LLM call, so a
                         # message can land mid-step with status still RUNNING and
