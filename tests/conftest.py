@@ -180,6 +180,16 @@ def suppress_logging(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def disable_refactoring_mining(monkeypatch):
+    """Keep tests from invoking the real RefactoringMiner binary.
+
+    Mining is enabled by default and hooks into every LocalConversation.run()
+    step; individual tests re-enable it via monkeypatch.setenv.
+    """
+    monkeypatch.setenv("OPENHANDS_REFACTORING_MINER", "")
+
+
+@pytest.fixture(autouse=True)
 def restore_observability_latch():
     """Keep one test's tracing setup from changing how every later test behaves.
 

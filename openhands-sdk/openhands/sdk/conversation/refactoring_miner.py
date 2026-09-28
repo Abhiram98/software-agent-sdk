@@ -1,16 +1,18 @@
 """Per-step refactoring mining with RefactoringMiner.
 
-Opt-in via the ``OPENHANDS_REFACTORING_MINER`` environment variable pointing at
-the RefactoringMiner launcher script (e.g.
-``.../RefactoringMiner-3.0.10/bin/RefactoringMiner``). After every agent step,
-the workspace working tree is snapshotted as a dangling git commit and
-RefactoringMiner is run on that commit to detect the refactorings introduced by
-the step. Findings are appended as JSON lines joinable with the conversation
-event export via ``session_id`` + ``step``.
+After every agent step, the workspace working tree is snapshotted as a dangling
+git commit parented on the previous step's snapshot, so RefactoringMiner only
+sees the diff introduced by that single step. Findings are appended as JSON
+lines joinable with the conversation event export via ``session_id`` + ``step``.
+
+The miner binary defaults to the local RefactoringMiner distribution and can be
+overridden with ``OPENHANDS_REFACTORING_MINER`` (set it to an empty string to
+disable mining entirely).
 """
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -31,6 +33,11 @@ logger = get_logger(__name__)
 REFACTORING_MINER_ENV_VAR = "OPENHANDS_REFACTORING_MINER"
 REFACTORING_LOG_ENV_VAR = "OPENHANDS_REFACTORING_LOG"
 REFACTORING_TIMEOUT_ENV_VAR = "OPENHANDS_REFACTORING_TIMEOUT"
+DEFAULT_REFACTORING_MINER = (
+    Path.home()
+    / "Documents/TBE/RefactoringMiner/build/distributions/"
+    / "RefactoringMiner-3.0.10/bin/RefactoringMiner"
+)
 DEFAULT_REFACTORING_LOG = Path.home() / ".openhands" / "refactoring_log.jsonl"
 DEFAULT_TIMEOUT_SECONDS = 600
 
@@ -47,7 +54,15 @@ _GIT_IDENTITY = {
 
 
 def get_miner_path() -> str | None:
-    return os.environ.get(REFACTORING_MINER_ENV_VAR) or None
+    """Resolve the RefactoringMiner launcher, or None when mining is disabled.
+
+    An explicitly empty ``OPENHANDS_REFACTORING_MINER`` disables mining;
+    an unset variable falls back to the local default distribution.
+    """
+    override = os.environ.get(REFACTORING_MINER_ENV_VAR)
+    if override is not None and override.strip() == "":
+        return None
+    return override or str(DEFAULT_REFACTORING_MINER)
 
 
 def get_refactoring_log_path() -> Path:
@@ -71,13 +86,16 @@ def _run_git(repo: str, *args: str, index_file: str | None = None) -> str:
     return result.stdout.strip()
 
 
-def snapshot_working_tree(repo: str) -> str | None:
+def snapshot_working_tree(repo: str, parent: str | None = None) -> str | None:
     """Capture the working tree as a dangling commit and return its sha.
 
     A temporary index is used so HEAD, the real index, and the working tree
-    are all left untouched. Returns None when the tree matches HEAD.
+    are all left untouched. The commit is parented on ``parent`` (or HEAD), so
+    chained snapshots diff against the previous step only. Returns None when
+    the tree matches the parent's tree.
     """
-    head = _run_git(repo, "rev-parse", "HEAD")
+    if parent is None:
+        parent = _run_git(repo, "rev-parse", "HEAD")
     fd, index_file = tempfile.mkstemp(prefix="openhands-refminer-index-")
     os.close(fd)
     # Git refuses to build an index on top of an empty file; let it create one.
@@ -85,11 +103,11 @@ def snapshot_working_tree(repo: str) -> str | None:
     try:
         _run_git(repo, "add", "-A", "--", ".", index_file=index_file)
         tree = _run_git(repo, "write-tree", index_file=index_file)
-        head_tree = _run_git(repo, "rev-parse", "HEAD^{tree}")
-        if tree == head_tree:
+        parent_tree = _run_git(repo, "rev-parse", f"{parent}^{{tree}}")
+        if tree == parent_tree:
             return None
         return _run_git(
-            repo, "commit-tree", tree, "-p", head, "-m", "openhands step snapshot"
+            repo, "commit-tree", tree, "-p", parent, "-m", "openhands step snapshot"
         )
     finally:
         os.unlink(index_file)
@@ -154,14 +172,23 @@ def log_step_refactorings(record: dict[str, Any]) -> None:
         f.write(json.dumps(record) + "\n")
 
 
-def mine_step_refactorings(conversation: "LocalConversation", step: int) -> None:
+def mine_step_refactorings(
+    conversation: "LocalConversation", step: int, parent_commit: str | None = None
+) -> str | None:
     """Detect and log refactorings introduced by the step that just finished.
 
-    Never raises: mining failures are recorded as an error record and logged.
+    ``parent_commit`` is the previous step's snapshot sha (None for the first
+    step), keeping each mined diff scoped to a single step. Returns the new
+    snapshot sha to chain from (None when the tree was unchanged or no
+    snapshot could be created). Never raises: mining failures are recorded as
+    an error record and logged.
     """
     miner = get_miner_path()
     if miner is None:
-        return
+        return None
+    if not (Path(miner).exists() or shutil.which(miner)):
+        logger.debug("Refactoring mining skipped: miner %s not found", miner)
+        return None
     workspace = str(conversation.workspace.working_dir)
     try:
         repo = _run_git(workspace, "rev-parse", "--show-toplevel")
@@ -171,7 +198,7 @@ def mine_step_refactorings(conversation: "LocalConversation", step: int) -> None
             workspace,
             e,
         )
-        return
+        return None
 
     record: dict[str, Any] = {
         "timestamp": datetime.now(UTC).isoformat(),
@@ -179,11 +206,13 @@ def mine_step_refactorings(conversation: "LocalConversation", step: int) -> None
         "step": step,
         "workspace": workspace,
         "repo_root": repo,
+        "parent_commit": parent_commit,
     }
     started = time.monotonic()
+    commit: str | None = None
     try:
         with _lock, _origin_remote(repo):
-            commit = snapshot_working_tree(repo)
+            commit = snapshot_working_tree(repo, parent_commit)
             if commit is None:
                 record.update(status="no_changes", num_refactorings=0, refactorings=[])
             else:
@@ -207,3 +236,4 @@ def mine_step_refactorings(conversation: "LocalConversation", step: int) -> None
         log_step_refactorings(record)
     except OSError as e:
         logger.warning("Failed to write refactoring log: %s", e)
+    return commit

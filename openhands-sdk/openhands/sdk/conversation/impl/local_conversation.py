@@ -313,6 +313,7 @@ class LocalConversation(BaseConversation):
         self._prompt_cache_key = prompt_cache_key
         self._step_holds_state_lock = False
         self._step_count = 0
+        self._refactoring_parent_commit: str | None = None
 
         # Store plugin specs for lazy loading (no IO in constructor)
         # Plugins will be loaded on first run() or send_message() call
@@ -1997,7 +1998,9 @@ class LocalConversation(BaseConversation):
                         self._step_holds_state_lock = False
                     iteration += 1
                     self._step_count += 1
-                    mine_step_refactorings(self, self._step_count)
+                    self._refactoring_parent_commit = mine_step_refactorings(
+                        self, self._step_count, self._refactoring_parent_commit
+                    )
 
                     # Check for non-finished terminal conditions
                     # Note: We intentionally do NOT check for FINISHED status here.
@@ -2258,8 +2261,11 @@ class LocalConversation(BaseConversation):
                             self._step_holds_state_lock = False
                         iteration += 1
                         self._step_count += 1
-                        await asyncio.to_thread(
-                            mine_step_refactorings, self, self._step_count
+                        self._refactoring_parent_commit = await asyncio.to_thread(
+                            mine_step_refactorings,
+                            self,
+                            self._step_count,
+                            self._refactoring_parent_commit,
                         )
 
                         # astep releases the state lock for the LLM call, so a

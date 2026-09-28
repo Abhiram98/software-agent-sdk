@@ -8,6 +8,8 @@ import pytest
 
 from openhands.sdk.conversation.impl.local_conversation import LocalConversation
 from openhands.sdk.conversation.refactoring_miner import (
+    DEFAULT_REFACTORING_MINER,
+    get_miner_path,
     mine_step_refactorings,
     snapshot_working_tree,
 )
@@ -57,8 +59,21 @@ def _conversation_stub(working_dir) -> LocalConversation:
     )
 
 
-def test_disabled_without_miner_env(git_repo, tmp_path, monkeypatch):
+def test_miner_path_resolution(monkeypatch):
     monkeypatch.delenv("OPENHANDS_REFACTORING_MINER", raising=False)
+    default = get_miner_path()
+    assert default == str(DEFAULT_REFACTORING_MINER)
+    assert default is not None and default.endswith("bin/RefactoringMiner")
+
+    monkeypatch.setenv("OPENHANDS_REFACTORING_MINER", "/custom/miner")
+    assert get_miner_path() == "/custom/miner"
+
+    monkeypatch.setenv("OPENHANDS_REFACTORING_MINER", "")
+    assert get_miner_path() is None
+
+
+def test_disabled_with_empty_miner_env(git_repo, tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENHANDS_REFACTORING_MINER", "")
     log = tmp_path / "log.jsonl"
     monkeypatch.setenv("OPENHANDS_REFACTORING_LOG", str(log))
 
@@ -119,11 +134,36 @@ def test_mine_step_refactorings_logs_record(git_repo, tmp_path, monkeypatch):
     record = records[0]
     assert record["session_id"] == str(session_id)
     assert record["step"] == 3
+    assert record["parent_commit"] is None
     assert record["status"] == "ok"
     assert record["num_refactorings"] == 1
     assert record["refactorings"][0]["type"] == "Extract Method"
     assert record["repo_root"] == str(git_repo)
     assert record["duration_ms"] >= 0
+
+
+def test_snapshots_chain_across_steps(git_repo, tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENHANDS_REFACTORING_MINER", _stub_miner(tmp_path, []))
+    log = tmp_path / "refactorings.jsonl"
+    monkeypatch.setenv("OPENHANDS_REFACTORING_LOG", str(log))
+
+    (git_repo / "src" / "App.java").write_text("class App { void a() {} }\n")
+    mine_step_refactorings(_conversation_stub(str(git_repo)), 1)
+    first = json.loads(log.read_text().splitlines()[0])["commit"]
+
+    (git_repo / "src" / "New.java").write_text("class New {}\n")
+    mine_step_refactorings(_conversation_stub(str(git_repo)), 2, first)
+    second = json.loads(log.read_text().splitlines()[1])["commit"]
+
+    # First snapshot diffs against HEAD; the second only against the first,
+    # so each step's refactorings are scoped to that step alone.
+    assert _git(str(git_repo), "rev-parse", f"{first}^") == _git(
+        str(git_repo), "rev-parse", "HEAD"
+    )
+    assert _git(str(git_repo), "rev-parse", f"{second}^") == first
+    assert _git(str(git_repo), "diff", "--name-only", f"{second}^..{second}") == (
+        "src/New.java"
+    )
 
 
 def test_mine_step_refactorings_no_changes(git_repo, tmp_path, monkeypatch):
