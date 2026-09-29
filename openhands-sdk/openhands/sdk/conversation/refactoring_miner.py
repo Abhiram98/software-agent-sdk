@@ -178,10 +178,12 @@ def mine_step_refactorings(
     """Detect and log refactorings introduced by the step that just finished.
 
     ``parent_commit`` is the previous step's snapshot sha (None for the first
-    step), keeping each mined diff scoped to a single step. Returns the new
-    snapshot sha to chain from (None when the tree was unchanged or no
-    snapshot could be created). Never raises: mining failures are recorded as
-    an error record and logged.
+    step), keeping each mined diff scoped to a single step. Returns the
+    snapshot sha to chain from: the new snapshot, or ``parent_commit`` when
+    the tree was unchanged, so a no-change step does not reset the baseline
+    back to HEAD (which would re-mine older edits). Returns None only when no
+    snapshot could be created at all. Never raises: mining failures are
+    recorded as an error record and logged.
     """
     miner = get_miner_path()
     if miner is None:
@@ -236,4 +238,4 @@ def mine_step_refactorings(
         log_step_refactorings(record)
     except OSError as e:
         logger.warning("Failed to write refactoring log: %s", e)
-    return commit
+    return commit or parent_commit

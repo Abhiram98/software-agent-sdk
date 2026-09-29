@@ -176,6 +176,32 @@ def test_mine_step_refactorings_no_changes(git_repo, tmp_path, monkeypatch):
     record = json.loads(log.read_text().splitlines()[0])
     assert record["status"] == "no_changes"
     assert record["refactorings"] == []
+    assert mine_step_refactorings(_conversation_stub(str(git_repo)), 2) is None
+
+
+def test_chain_survives_no_change_steps(git_repo, tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENHANDS_REFACTORING_MINER", _stub_miner(tmp_path, []))
+    log = tmp_path / "refactorings.jsonl"
+    monkeypatch.setenv("OPENHANDS_REFACTORING_LOG", str(log))
+
+    stub = _conversation_stub(str(git_repo))
+    (git_repo / "src" / "App.java").write_text("class App { void a() {} }\n")
+    first = mine_step_refactorings(stub, 1)
+    assert first is not None
+
+    # An idle step emits a no_changes record but must keep the chain anchored
+    # on the last snapshot instead of resetting it back to HEAD.
+    assert mine_step_refactorings(stub, 2, first) == first
+
+    # A later edit is therefore mined against the last snapshot only, so it
+    # cannot re-report refactorings already attributed to earlier steps.
+    (git_repo / "src" / "New.java").write_text("class New {}\n")
+    second = mine_step_refactorings(stub, 3, first)
+    assert second is not None
+    assert _git(str(git_repo), "rev-parse", f"{second}^") == first
+    assert _git(str(git_repo), "diff", "--name-only", f"{second}^..{second}") == (
+        "src/New.java"
+    )
 
 
 def test_mine_step_refactorings_skips_non_git_dir(tmp_path, monkeypatch):
