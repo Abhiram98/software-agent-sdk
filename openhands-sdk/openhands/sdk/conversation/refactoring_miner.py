@@ -190,6 +190,44 @@ def log_step_refactorings(record: dict[str, Any]) -> None:
         f.write(json.dumps(record) + "\n")
 
 
+def _resolve_mining_target(
+    conversation: "LocalConversation",
+) -> tuple[str, str] | None:
+    """Resolve (miner, repo) for the conversation's workspace, or None."""
+    miner = get_miner_path()
+    if miner is None:
+        return None
+    if not (Path(miner).exists() or shutil.which(miner)):
+        logger.debug("Refactoring mining skipped: miner %s not found", miner)
+        return None
+    workspace = str(conversation.workspace.working_dir)
+    try:
+        repo = _run_git(workspace, "rev-parse", "--show-toplevel")
+    except Exception as e:
+        logger.debug(
+            "Refactoring mining skipped: workspace %s is not a git repo (%s)",
+            workspace,
+            e,
+        )
+        return None
+    return miner, repo
+
+
+def seed_refactoring_baseline(conversation: "LocalConversation") -> str | None:
+    """Anchor mining to the working tree as it exists before any agent step.
+
+    Snapshots the tree (parented on HEAD) so pre-existing uncommitted changes
+    are attributed to the baseline instead of the agent's first step. Returns
+    the snapshot sha, HEAD when the tree is clean, or None when mining is not
+    applicable (disabled, miner missing, or workspace not a git repo).
+    """
+    resolved = _resolve_mining_target(conversation)
+    if resolved is None:
+        return None
+    _, repo = resolved
+    return snapshot_working_tree(repo) or _run_git(repo, "rev-parse", "HEAD")
+
+
 def mine_step_refactorings(
     conversation: "LocalConversation", step: int, parent_commit: str | None = None
 ) -> tuple[str | None, list[dict[str, Any]]]:
@@ -204,28 +242,16 @@ def mine_step_refactorings(
     be created at all. Never raises: mining failures are recorded as an error
     record and logged.
     """
-    miner = get_miner_path()
-    if miner is None:
+    resolved = _resolve_mining_target(conversation)
+    if resolved is None:
         return None, []
-    if not (Path(miner).exists() or shutil.which(miner)):
-        logger.debug("Refactoring mining skipped: miner %s not found", miner)
-        return None, []
-    workspace = str(conversation.workspace.working_dir)
-    try:
-        repo = _run_git(workspace, "rev-parse", "--show-toplevel")
-    except Exception as e:
-        logger.debug(
-            "Refactoring mining skipped: workspace %s is not a git repo (%s)",
-            workspace,
-            e,
-        )
-        return None, []
+    miner, repo = resolved
 
     record: dict[str, Any] = {
         "timestamp": datetime.now(UTC).isoformat(),
         "session_id": str(conversation.state.id),
         "step": step,
-        "workspace": workspace,
+        "workspace": str(conversation.workspace.working_dir),
         "repo_root": repo,
         "parent_commit": parent_commit,
     }

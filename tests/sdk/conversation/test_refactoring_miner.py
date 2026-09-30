@@ -13,6 +13,7 @@ from openhands.sdk.conversation.refactoring_miner import (
     get_miner_path,
     is_refactoring_nudge_enabled,
     mine_step_refactorings,
+    seed_refactoring_baseline,
     snapshot_working_tree,
 )
 
@@ -288,3 +289,38 @@ def test_temporary_origin_remote_lifecycle(git_repo, tmp_path, monkeypatch):
     mine_step_refactorings(_conversation_stub(str(git_repo)), 2)
 
     assert _git(str(git_repo), "remote", "get-url", "origin") == real_url
+
+
+def test_seed_baseline_absorbs_pre_existing_changes(git_repo, tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENHANDS_REFACTORING_MINER", _stub_miner(tmp_path, []))
+    stub = _conversation_stub(str(git_repo))
+    # Uncommitted change that predates the conversation.
+    (git_repo / "src" / "Existing.java").write_text("class Existing {}\n")
+
+    baseline = seed_refactoring_baseline(stub)
+    assert baseline is not None
+    assert _git(str(git_repo), "rev-parse", f"{baseline}^") == _git(
+        str(git_repo), "rev-parse", "HEAD"
+    )
+
+    # The agent's edit is mined against the baseline only, so the
+    # pre-existing change is not attributed to the agent's first step.
+    (git_repo / "src" / "App.java").write_text("class App { void a() {} }\n")
+    commit, _ = mine_step_refactorings(stub, 1, baseline)
+    assert commit is not None
+    assert _git(str(git_repo), "rev-parse", f"{commit}^") == baseline
+    assert _git(str(git_repo), "diff", "--name-only", f"{commit}^..{commit}") == (
+        "src/App.java"
+    )
+
+
+def test_seed_baseline_clean_tree_returns_head(git_repo, tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENHANDS_REFACTORING_MINER", _stub_miner(tmp_path, []))
+    assert seed_refactoring_baseline(_conversation_stub(str(git_repo))) == _git(
+        str(git_repo), "rev-parse", "HEAD"
+    )
+
+
+def test_seed_baseline_skips_disabled_miner(git_repo, monkeypatch):
+    monkeypatch.setenv("OPENHANDS_REFACTORING_MINER", "")
+    assert seed_refactoring_baseline(_conversation_stub(str(git_repo))) is None

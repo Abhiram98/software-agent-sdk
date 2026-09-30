@@ -22,6 +22,7 @@ from openhands.sdk.conversation.refactoring_miner import (
     extract_method_detected,
     is_refactoring_nudge_enabled,
     mine_step_refactorings,
+    seed_refactoring_baseline,
 )
 from openhands.sdk.conversation.secret_registry import SecretValue
 from openhands.sdk.conversation.state import (
@@ -737,6 +738,16 @@ class LocalConversation(BaseConversation):
         self._on_event(
             ConversationErrorEvent(source="environment", code=code, detail=detail)
         )
+
+    def _ensure_refactoring_baseline(self) -> None:
+        """Anchor the mining baseline before the agent's first step.
+
+        Snapshots the working tree so pre-existing uncommitted changes are
+        attributed to the baseline rather than mined as the agent's work.
+        No-op once the baseline exists or when mining is not applicable.
+        """
+        if self._refactoring_parent_commit is None:
+            self._refactoring_parent_commit = seed_refactoring_baseline(self)
 
     def _maybe_nudge_extract_method(self, refactorings: list[dict[str, Any]]) -> None:
         """Nudge the agent toward the IDE when a step applied Extract Method.
@@ -2025,6 +2036,7 @@ class LocalConversation(BaseConversation):
                     # re-acquiring it instead of deadlocking (#3485).
                     self._step_holds_state_lock = True
                     try:
+                        self._ensure_refactoring_baseline()
                         self.agent.step(
                             self, on_event=self._on_event, on_token=self._on_token
                         )
@@ -2290,6 +2302,7 @@ class LocalConversation(BaseConversation):
                         self._step_holds_state_lock = True
                         last_user_message_id = self._state.last_user_message_id
                         try:
+                            await asyncio.to_thread(self._ensure_refactoring_baseline)
                             await self.agent.astep(
                                 self,
                                 on_event=self._on_event,
