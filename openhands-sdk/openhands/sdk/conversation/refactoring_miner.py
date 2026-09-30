@@ -87,6 +87,27 @@ def extract_method_detected(refactorings: list[dict[str, Any]]) -> bool:
     return any(r.get("type") == "Extract Method" for r in refactorings)
 
 
+def extracted_method_names(refactorings: list[dict[str, Any]]) -> list[str]:
+    """Names of the methods extracted by the step's Extract Method entries.
+
+    Parses names like ``computeFacetsRowBased`` from RefactoringMiner
+    descriptions of the form
+    ``"Extract Method <signature> extracted from <signature> in class <cls>"``.
+    """
+    names: list[str] = []
+    for r in refactorings:
+        if r.get("type") != "Extract Method":
+            continue
+        head, sep, _ = str(r.get("description", "")).partition(" extracted from ")
+        if not sep:
+            continue
+        signature = head.removeprefix("Extract Method ").strip()
+        name = signature.split("(", 1)[0].split()[-1] if signature else ""
+        if name:
+            names.append(name)
+    return names
+
+
 def _run_git(repo: str, *args: str, index_file: str | None = None) -> str:
     env = dict(os.environ) | _GIT_IDENTITY
     if index_file is not None:

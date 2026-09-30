@@ -20,6 +20,7 @@ from openhands.sdk.conversation.event_store import EventLog
 from openhands.sdk.conversation.exceptions import ConversationRunError
 from openhands.sdk.conversation.refactoring_miner import (
     extract_method_detected,
+    extracted_method_names,
     is_refactoring_nudge_enabled,
     mine_step_refactorings,
     seed_refactoring_baseline,
@@ -759,6 +760,28 @@ class LocalConversation(BaseConversation):
             refactorings
         ):
             return
+        names = extracted_method_names(refactorings)
+        if names:
+            listing = ", ".join(names)
+            detected = (
+                "Refactoring analysis detected that the previous step applied "
+                "an 'Extract Method' refactoring through direct text edits, "
+                f"extracting {listing}."
+            )
+            redo = (
+                f"Please revert that edit and extract {listing} again using "
+                "the extract method tool from the IntelliJ IDEA MCP server."
+            )
+        else:
+            detected = (
+                "Refactoring analysis detected that the previous step applied "
+                "an 'Extract Method' refactoring through direct text edits."
+            )
+            redo = (
+                "Please revert that edit and perform the extraction again "
+                "using the extract method tool from the IntelliJ IDEA MCP "
+                "server."
+            )
         self._on_event(
             MessageEvent(
                 source="environment",
@@ -767,14 +790,11 @@ class LocalConversation(BaseConversation):
                     content=[
                         TextContent(
                             text=(
-                                "Refactoring analysis detected that the previous "
-                                "step applied an 'Extract Method' refactoring "
-                                "through direct text edits. For this and future "
-                                "method extractions in this project, use the "
-                                "extract method tool from the IntelliJ IDEA MCP "
-                                "server instead of editing the code manually, so "
-                                "the IDE applies the refactoring structurally and "
-                                "keeps references consistent."
+                                f"{detected} {redo} For this and future method "
+                                "extractions in this project, use the extract "
+                                "method tool instead of editing the code "
+                                "manually, so the IDE applies the refactoring "
+                                "structurally and keeps references consistent."
                             )
                         )
                     ],

@@ -10,6 +10,7 @@ from openhands.sdk.conversation.impl.local_conversation import LocalConversation
 from openhands.sdk.conversation.refactoring_miner import (
     DEFAULT_REFACTORING_MINER,
     extract_method_detected,
+    extracted_method_names,
     get_miner_path,
     is_refactoring_nudge_enabled,
     mine_step_refactorings,
@@ -216,6 +217,29 @@ def test_extract_method_detected():
     assert not extract_method_detected([])
 
 
+def test_extracted_method_names():
+    extract = {
+        "type": "Extract Method",
+        "description": (
+            "Extract Method protected computeFacetsRowBased() : void extracted "
+            "from public computeFacets() : void in class com.google.Engine"
+        ),
+    }
+    other = {
+        "type": "Extract Method",
+        "description": "Extract Method createImage(size int) : void extracted "
+        "from public Visitor(int x) in class Visitor",
+    }
+    unparseable = {"type": "Extract Method", "description": "no signature here"}
+
+    assert extracted_method_names([extract, other, unparseable]) == [
+        "computeFacetsRowBased",
+        "createImage",
+    ]
+    assert extracted_method_names([unparseable]) == []
+    assert extracted_method_names([]) == []
+
+
 def test_nudge_env_toggle(monkeypatch):
     monkeypatch.delenv("OPENHANDS_REFACTORING_NUDGE", raising=False)
     assert is_refactoring_nudge_enabled()
@@ -239,12 +263,20 @@ def _nudge_stub(events: list) -> LocalConversation:
 def test_nudge_emitted_for_extract_method(monkeypatch):
     monkeypatch.setenv("OPENHANDS_REFACTORING_NUDGE", "1")
     events: list = []
-    extract = [{"type": "Extract Method", "description": "Extract Method f()"}]
+    extract = [
+        {
+            "type": "Extract Method",
+            "description": "Extract Method protected f() : void extracted "
+            "from public g() : void in class App",
+        }
+    ]
 
     LocalConversation._maybe_nudge_extract_method(_nudge_stub(events), extract)
 
     assert len(events) == 1
     content = events[0].llm_message.content[0]
+    assert "f" in content.text
+    assert "revert" in content.text
     assert "IntelliJ IDEA MCP" in content.text
 
 
