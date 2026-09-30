@@ -18,7 +18,11 @@ from openhands.sdk.conversation.base import BaseConversation
 from openhands.sdk.conversation.cancellation import CancellationToken
 from openhands.sdk.conversation.event_store import EventLog
 from openhands.sdk.conversation.exceptions import ConversationRunError
-from openhands.sdk.conversation.refactoring_miner import mine_step_refactorings
+from openhands.sdk.conversation.refactoring_miner import (
+    extract_method_detected,
+    is_refactoring_nudge_enabled,
+    mine_step_refactorings,
+)
 from openhands.sdk.conversation.secret_registry import SecretValue
 from openhands.sdk.conversation.state import (
     ConversationExecutionStatus,
@@ -734,11 +738,41 @@ class LocalConversation(BaseConversation):
             ConversationErrorEvent(source="environment", code=code, detail=detail)
         )
 
-    def _check_stuck_or_nudge(self) -> bool:
-        """Nudge once on a repeating action-error streak, else apply is_stuck().
+    def _maybe_nudge_extract_method(self, refactorings: list[dict[str, Any]]) -> None:
+        """Nudge the agent toward the IDE when a step applied Extract Method.
 
-        Returns True if STUCK was set and the run loop should stop.
+        Emits an environment message into the conversation history so the next
+        step sees it. On by default; disable via ``OPENHANDS_REFACTORING_NUDGE``.
         """
+        if not is_refactoring_nudge_enabled() or not extract_method_detected(
+            refactorings
+        ):
+            return
+        self._on_event(
+            MessageEvent(
+                source="environment",
+                llm_message=Message(
+                    role="user",
+                    content=[
+                        TextContent(
+                            text=(
+                                "Refactoring analysis detected that the previous "
+                                "step applied an 'Extract Method' refactoring "
+                                "through direct text edits. For this and future "
+                                "method extractions in this project, use the "
+                                "extract method tool from the IntelliJ IDEA MCP "
+                                "server instead of editing the code manually, so "
+                                "the IDE applies the refactoring structurally and "
+                                "keeps references consistent."
+                            )
+                        )
+                    ],
+                ),
+            )
+        )
+
+    def _check_stuck_or_nudge(self) -> bool:
+        """Nudge once on a repeating action-error streak, else apply is_stuck()."""
         if not self._stuck_detector:
             return False
 
@@ -1998,9 +2032,13 @@ class LocalConversation(BaseConversation):
                         self._step_holds_state_lock = False
                     iteration += 1
                     self._step_count += 1
-                    self._refactoring_parent_commit = mine_step_refactorings(
+                    (
+                        self._refactoring_parent_commit,
+                        step_refactorings,
+                    ) = mine_step_refactorings(
                         self, self._step_count, self._refactoring_parent_commit
                     )
+                    self._maybe_nudge_extract_method(step_refactorings)
 
                     # Check for non-finished terminal conditions
                     # Note: We intentionally do NOT check for FINISHED status here.
@@ -2261,12 +2299,16 @@ class LocalConversation(BaseConversation):
                             self._step_holds_state_lock = False
                         iteration += 1
                         self._step_count += 1
-                        self._refactoring_parent_commit = await asyncio.to_thread(
+                        (
+                            self._refactoring_parent_commit,
+                            step_refactorings,
+                        ) = await asyncio.to_thread(
                             mine_step_refactorings,
                             self,
                             self._step_count,
                             self._refactoring_parent_commit,
                         )
+                        self._maybe_nudge_extract_method(step_refactorings)
 
                         # astep releases the state lock for the LLM call, so a
                         # message can land mid-step with status still RUNNING and

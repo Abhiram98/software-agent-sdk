@@ -33,6 +33,7 @@ logger = get_logger(__name__)
 REFACTORING_MINER_ENV_VAR = "OPENHANDS_REFACTORING_MINER"
 REFACTORING_LOG_ENV_VAR = "OPENHANDS_REFACTORING_LOG"
 REFACTORING_TIMEOUT_ENV_VAR = "OPENHANDS_REFACTORING_TIMEOUT"
+REFACTORING_NUDGE_ENV_VAR = "OPENHANDS_REFACTORING_NUDGE"
 DEFAULT_REFACTORING_MINER = (
     Path.home()
     / "Documents/TBE/RefactoringMiner/build/distributions/"
@@ -67,6 +68,23 @@ def get_miner_path() -> str | None:
 
 def get_refactoring_log_path() -> Path:
     return Path(os.environ.get(REFACTORING_LOG_ENV_VAR) or DEFAULT_REFACTORING_LOG)
+
+
+def is_refactoring_nudge_enabled() -> bool:
+    """Whether detected refactorings should trigger a behavioral nudge.
+
+    On by default; a falsy ``OPENHANDS_REFACTORING_NUDGE`` value
+    ("0", "false", "no", "off", case-insensitive, or empty) disables it.
+    """
+    value = os.environ.get(REFACTORING_NUDGE_ENV_VAR)
+    if value is None:
+        return True
+    return value.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def extract_method_detected(refactorings: list[dict[str, Any]]) -> bool:
+    """Whether any of the step's mined refactorings is an Extract Method."""
+    return any(r.get("type") == "Extract Method" for r in refactorings)
 
 
 def _run_git(repo: str, *args: str, index_file: str | None = None) -> str:
@@ -174,23 +192,24 @@ def log_step_refactorings(record: dict[str, Any]) -> None:
 
 def mine_step_refactorings(
     conversation: "LocalConversation", step: int, parent_commit: str | None = None
-) -> str | None:
+) -> tuple[str | None, list[dict[str, Any]]]:
     """Detect and log refactorings introduced by the step that just finished.
 
     ``parent_commit`` is the previous step's snapshot sha (None for the first
-    step), keeping each mined diff scoped to a single step. Returns the
-    snapshot sha to chain from: the new snapshot, or ``parent_commit`` when
-    the tree was unchanged, so a no-change step does not reset the baseline
-    back to HEAD (which would re-mine older edits). Returns None only when no
-    snapshot could be created at all. Never raises: mining failures are
-    recorded as an error record and logged.
+    step), keeping each mined diff scoped to a single step. Returns a tuple of
+    the snapshot sha to chain from and the step's mined refactorings. The
+    chain sha is the new snapshot, or ``parent_commit`` when the tree was
+    unchanged, so a no-change step does not reset the baseline back to HEAD
+    (which would re-mine older edits). It is None only when no snapshot could
+    be created at all. Never raises: mining failures are recorded as an error
+    record and logged.
     """
     miner = get_miner_path()
     if miner is None:
-        return None
+        return None, []
     if not (Path(miner).exists() or shutil.which(miner)):
         logger.debug("Refactoring mining skipped: miner %s not found", miner)
-        return None
+        return None, []
     workspace = str(conversation.workspace.working_dir)
     try:
         repo = _run_git(workspace, "rev-parse", "--show-toplevel")
@@ -200,7 +219,7 @@ def mine_step_refactorings(
             workspace,
             e,
         )
-        return None
+        return None, []
 
     record: dict[str, Any] = {
         "timestamp": datetime.now(UTC).isoformat(),
@@ -212,6 +231,7 @@ def mine_step_refactorings(
     }
     started = time.monotonic()
     commit: str | None = None
+    refactorings: list[dict[str, Any]] = []
     try:
         with _lock, _origin_remote(repo):
             commit = snapshot_working_tree(repo, parent_commit)
@@ -238,4 +258,4 @@ def mine_step_refactorings(
         log_step_refactorings(record)
     except OSError as e:
         logger.warning("Failed to write refactoring log: %s", e)
-    return commit or parent_commit
+    return commit or parent_commit, refactorings

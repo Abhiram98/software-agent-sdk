@@ -9,7 +9,9 @@ import pytest
 from openhands.sdk.conversation.impl.local_conversation import LocalConversation
 from openhands.sdk.conversation.refactoring_miner import (
     DEFAULT_REFACTORING_MINER,
+    extract_method_detected,
     get_miner_path,
+    is_refactoring_nudge_enabled,
     mine_step_refactorings,
     snapshot_working_tree,
 )
@@ -176,7 +178,7 @@ def test_mine_step_refactorings_no_changes(git_repo, tmp_path, monkeypatch):
     record = json.loads(log.read_text().splitlines()[0])
     assert record["status"] == "no_changes"
     assert record["refactorings"] == []
-    assert mine_step_refactorings(_conversation_stub(str(git_repo)), 2) is None
+    assert mine_step_refactorings(_conversation_stub(str(git_repo)), 2)[0] is None
 
 
 def test_chain_survives_no_change_steps(git_repo, tmp_path, monkeypatch):
@@ -186,22 +188,78 @@ def test_chain_survives_no_change_steps(git_repo, tmp_path, monkeypatch):
 
     stub = _conversation_stub(str(git_repo))
     (git_repo / "src" / "App.java").write_text("class App { void a() {} }\n")
-    first = mine_step_refactorings(stub, 1)
+    first = mine_step_refactorings(stub, 1)[0]
     assert first is not None
 
     # An idle step emits a no_changes record but must keep the chain anchored
     # on the last snapshot instead of resetting it back to HEAD.
-    assert mine_step_refactorings(stub, 2, first) == first
+    assert mine_step_refactorings(stub, 2, first)[0] == first
 
     # A later edit is therefore mined against the last snapshot only, so it
     # cannot re-report refactorings already attributed to earlier steps.
     (git_repo / "src" / "New.java").write_text("class New {}\n")
-    second = mine_step_refactorings(stub, 3, first)
+    second = mine_step_refactorings(stub, 3, first)[0]
     assert second is not None
     assert _git(str(git_repo), "rev-parse", f"{second}^") == first
     assert _git(str(git_repo), "diff", "--name-only", f"{second}^..{second}") == (
         "src/New.java"
     )
+
+
+def test_extract_method_detected():
+    extract = {"type": "Extract Method", "description": "Extract Method f()"}
+    other = {"type": "Inline Method", "description": "Inline Method f()"}
+
+    assert extract_method_detected([other, extract])
+    assert not extract_method_detected([other])
+    assert not extract_method_detected([])
+
+
+def test_nudge_env_toggle(monkeypatch):
+    monkeypatch.delenv("OPENHANDS_REFACTORING_NUDGE", raising=False)
+    assert is_refactoring_nudge_enabled()
+
+    for value in ("1", "true", "YES", " True "):
+        monkeypatch.setenv("OPENHANDS_REFACTORING_NUDGE", value)
+        assert is_refactoring_nudge_enabled()
+
+    for value in ("", "0", "false", "off"):
+        monkeypatch.setenv("OPENHANDS_REFACTORING_NUDGE", value)
+        assert not is_refactoring_nudge_enabled()
+
+
+def _nudge_stub(events: list) -> LocalConversation:
+    return cast(
+        LocalConversation,
+        SimpleNamespace(_on_event=events.append),
+    )
+
+
+def test_nudge_emitted_for_extract_method(monkeypatch):
+    monkeypatch.setenv("OPENHANDS_REFACTORING_NUDGE", "1")
+    events: list = []
+    extract = [{"type": "Extract Method", "description": "Extract Method f()"}]
+
+    LocalConversation._maybe_nudge_extract_method(_nudge_stub(events), extract)
+
+    assert len(events) == 1
+    content = events[0].llm_message.content[0]
+    assert "IntelliJ IDEA MCP" in content.text
+
+
+def test_nudge_skipped_without_extract_method_or_toggle(monkeypatch):
+    monkeypatch.setenv("OPENHANDS_REFACTORING_NUDGE", "1")
+    events: list = []
+    other = [{"type": "Inline Method", "description": "Inline Method f()"}]
+
+    LocalConversation._maybe_nudge_extract_method(_nudge_stub(events), other)
+
+    monkeypatch.setenv("OPENHANDS_REFACTORING_NUDGE", "")
+    LocalConversation._maybe_nudge_extract_method(_nudge_stub(events), other)
+    extract = [{"type": "Extract Method", "description": "Extract Method f()"}]
+    LocalConversation._maybe_nudge_extract_method(_nudge_stub(events), extract)
+
+    assert events == []
 
 
 def test_mine_step_refactorings_skips_non_git_dir(tmp_path, monkeypatch):
