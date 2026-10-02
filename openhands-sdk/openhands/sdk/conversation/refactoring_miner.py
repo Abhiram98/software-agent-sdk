@@ -12,16 +12,19 @@ disable mining entirely).
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import threading
 import time
+from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from openhands.sdk.event import ActionEvent, Event
 from openhands.sdk.logger import get_logger
 
 
@@ -106,6 +109,57 @@ def extracted_method_names(refactorings: list[dict[str, Any]]) -> list[str]:
         if name:
             names.append(name)
     return names
+
+
+# Tools whose actions represent direct text edits the agent made itself.
+# Edits made through shell commands are not attributed yet.
+DIRECT_EDIT_TOOLS = frozenset({"file_editor", "apply_patch"})
+
+_PATCH_TARGET_RE = re.compile(
+    r"^\*\*\* (?:Update|Add|Delete|Move) File: (.+)$", re.MULTILINE
+)
+
+
+def _normalized_path(raw: str, root: str) -> str:
+    path = Path(raw)
+    if not path.is_absolute():
+        path = Path(root) / path
+    return os.path.realpath(path)
+
+
+def refactoring_file_paths(refactorings: list[dict[str, Any]], root: str) -> set[str]:
+    """Absolute normalized paths touched by the refactorings.
+
+    RefactoringMiner reports paths relative to the repo root; they are
+    resolved against ``root`` for comparison with tool action paths.
+    """
+    paths: set[str] = set()
+    for r in refactorings:
+        for side in ("leftSideLocations", "rightSideLocations"):
+            for loc in r.get(side) or []:
+                raw = loc.get("filePath")
+                if raw:
+                    paths.add(_normalized_path(str(raw), root))
+    return paths
+
+
+def direct_edit_paths(events: Sequence[Event], root: str) -> set[str]:
+    """Absolute normalized paths edited by direct-edit tool actions in events."""
+    paths: set[str] = set()
+    for event in events:
+        if not isinstance(event, ActionEvent) or event.action is None:
+            continue
+        if event.tool_name not in DIRECT_EDIT_TOOLS:
+            continue
+        args = event.action.model_dump()
+        if event.tool_name == "file_editor":
+            raw = args.get("path")
+            raws = [raw] if isinstance(raw, str) else []
+        else:
+            patch = args.get("patch")
+            raws = _PATCH_TARGET_RE.findall(patch) if isinstance(patch, str) else []
+        paths.update(_normalized_path(raw, root) for raw in raws)
+    return paths
 
 
 def _run_git(repo: str, *args: str, index_file: str | None = None) -> str:

@@ -9,14 +9,19 @@ import pytest
 from openhands.sdk.conversation.impl.local_conversation import LocalConversation
 from openhands.sdk.conversation.refactoring_miner import (
     DEFAULT_REFACTORING_MINER,
+    direct_edit_paths,
     extract_method_detected,
     extracted_method_names,
     get_miner_path,
     is_refactoring_nudge_enabled,
     mine_step_refactorings,
+    refactoring_file_paths,
     seed_refactoring_baseline,
     snapshot_working_tree,
 )
+from openhands.sdk.event import ActionEvent
+from openhands.sdk.llm import MessageToolCall
+from openhands.sdk.tool.schema import Action
 
 
 def _git(repo: str, *args: str) -> str:
@@ -253,46 +258,139 @@ def test_nudge_env_toggle(monkeypatch):
         assert not is_refactoring_nudge_enabled()
 
 
-def _nudge_stub(events: list) -> LocalConversation:
+def _nudge_stub(events: list, working_dir: str = "/ws") -> LocalConversation:
     return cast(
         LocalConversation,
-        SimpleNamespace(_on_event=events.append),
+        SimpleNamespace(
+            _on_event=events.append,
+            workspace=SimpleNamespace(working_dir=working_dir),
+        ),
     )
 
 
-def test_nudge_emitted_for_extract_method(monkeypatch):
+class _EditAction(Action):
+    path: str | None = None
+    patch: str | None = None
+
+
+def _action_event(tool_name: str, **fields) -> ActionEvent:
+    return ActionEvent(
+        thought=[],
+        tool_name=tool_name,
+        tool_call_id="call_1",
+        tool_call=MessageToolCall(
+            id="call_1", name=tool_name, arguments="{}", origin="completion"
+        ),
+        llm_response_id="resp_1",
+        action=_EditAction(**fields),
+    )
+
+
+def _extract_refactoring(file_path: str = "src/App.java") -> dict:
+    return {
+        "type": "Extract Method",
+        "description": "Extract Method protected f() : void extracted "
+        "from public g() : void in class App",
+        "leftSideLocations": [{"filePath": file_path}],
+        "rightSideLocations": [{"filePath": file_path}],
+    }
+
+
+def test_nudge_emitted_for_direct_edit_extraction(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENHANDS_REFACTORING_NUDGE", "1")
-    events: list = []
-    extract = [
-        {
-            "type": "Extract Method",
-            "description": "Extract Method protected f() : void extracted "
-            "from public g() : void in class App",
-        }
-    ]
+    emitted: list = []
+    refactoring = _extract_refactoring("src/App.java")
+    edit = _action_event("file_editor", path=str(tmp_path / "src" / "App.java"))
 
-    LocalConversation._maybe_nudge_extract_method(_nudge_stub(events), extract)
+    LocalConversation._maybe_nudge_extract_method(
+        _nudge_stub(emitted, str(tmp_path)), [refactoring], [edit]
+    )
 
-    assert len(events) == 1
-    content = events[0].llm_message.content[0]
+    assert len(emitted) == 1
+    content = emitted[0].llm_message.content[0]
     assert "f" in content.text
     assert "revert" in content.text
     assert "IntelliJ IDEA MCP" in content.text
 
 
-def test_nudge_skipped_without_extract_method_or_toggle(monkeypatch):
+def test_nudge_skipped_when_edit_not_directly_attributed(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENHANDS_REFACTORING_NUDGE", "1")
-    events: list = []
-    other = [{"type": "Inline Method", "description": "Inline Method f()"}]
+    emitted: list = []
+    refactoring = _extract_refactoring("src/App.java")
+    # IDE-tool extraction: no direct-edit action in the step.
+    LocalConversation._maybe_nudge_extract_method(
+        _nudge_stub(emitted, str(tmp_path)), [refactoring], []
+    )
+    # Direct edit on an unrelated file.
+    other_file = _action_event("file_editor", path=str(tmp_path / "src" / "Other.java"))
+    LocalConversation._maybe_nudge_extract_method(
+        _nudge_stub(emitted, str(tmp_path)), [refactoring], [other_file]
+    )
 
-    LocalConversation._maybe_nudge_extract_method(_nudge_stub(events), other)
+    assert emitted == []
+
+
+def test_nudge_skipped_without_extract_method_or_toggle(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENHANDS_REFACTORING_NUDGE", "1")
+    emitted: list = []
+    edit = _action_event("file_editor", path=str(tmp_path / "src" / "App.java"))
+    other = [_extract_refactoring()]
+    other[0]["type"] = "Inline Method"
+
+    LocalConversation._maybe_nudge_extract_method(
+        _nudge_stub(emitted, str(tmp_path)), other, [edit]
+    )
 
     monkeypatch.setenv("OPENHANDS_REFACTORING_NUDGE", "")
-    LocalConversation._maybe_nudge_extract_method(_nudge_stub(events), other)
-    extract = [{"type": "Extract Method", "description": "Extract Method f()"}]
-    LocalConversation._maybe_nudge_extract_method(_nudge_stub(events), extract)
+    LocalConversation._maybe_nudge_extract_method(
+        _nudge_stub(emitted, str(tmp_path)), [_extract_refactoring()], [edit]
+    )
 
-    assert events == []
+    assert emitted == []
+
+
+def test_direct_edit_paths(tmp_path):
+    events = [
+        _action_event("file_editor", path=str(tmp_path / "a.java")),
+        _action_event(
+            "apply_patch",
+            patch=(
+                "*** Begin Patch\n"
+                "*** Update File: rel/b.java\n"
+                "+x\n"
+                "*** Add File: /abs/c.java\n"
+                "+y\n"
+                "*** End Patch"
+            ),
+        ),
+        _action_event("execute_bash", path=str(tmp_path / "d.java")),
+        _action_event("file_editor"),
+    ]
+
+    paths = direct_edit_paths(events, str(tmp_path))
+
+    assert paths == {
+        str(tmp_path / "a.java"),
+        str(tmp_path / "rel" / "b.java"),
+        "/abs/c.java",
+    }
+
+
+def test_refactoring_file_paths(tmp_path):
+    refactorings = [
+        {
+            "type": "Extract Method",
+            "leftSideLocations": [{"filePath": "src/rel.java"}],
+            "rightSideLocations": [{"filePath": str(tmp_path / "src" / "abs.java")}],
+        },
+        {"type": "Extract Method", "leftSideLocations": [], "rightSideLocations": []},
+    ]
+
+    assert refactoring_file_paths(refactorings, str(tmp_path)) == {
+        str(tmp_path / "src" / "rel.java"),
+        str(tmp_path / "src" / "abs.java"),
+    }
+    assert refactoring_file_paths([], str(tmp_path)) == set()
 
 
 def test_mine_step_refactorings_skips_non_git_dir(tmp_path, monkeypatch):

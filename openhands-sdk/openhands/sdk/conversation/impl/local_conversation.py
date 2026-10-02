@@ -19,10 +19,12 @@ from openhands.sdk.conversation.cancellation import CancellationToken
 from openhands.sdk.conversation.event_store import EventLog
 from openhands.sdk.conversation.exceptions import ConversationRunError
 from openhands.sdk.conversation.refactoring_miner import (
+    direct_edit_paths,
     extract_method_detected,
     extracted_method_names,
     is_refactoring_nudge_enabled,
     mine_step_refactorings,
+    refactoring_file_paths,
     seed_refactoring_baseline,
 )
 from openhands.sdk.conversation.secret_registry import SecretValue
@@ -750,14 +752,26 @@ class LocalConversation(BaseConversation):
         if self._refactoring_parent_commit is None:
             self._refactoring_parent_commit = seed_refactoring_baseline(self)
 
-    def _maybe_nudge_extract_method(self, refactorings: list[dict[str, Any]]) -> None:
+    def _maybe_nudge_extract_method(
+        self, refactorings: list[dict[str, Any]], step_events: Sequence[Event]
+    ) -> None:
         """Nudge the agent toward the IDE when a step applied Extract Method.
 
         Emits an environment message into the conversation history so the next
         step sees it. On by default; disable via ``OPENHANDS_REFACTORING_NUDGE``.
+
+        Only fires when a direct-edit tool action in the step touched a file
+        targeted by the refactorings, so extractions performed through the
+        IDE's extract method MCP tool stay silent. Edits made via shell
+        commands are not attributed yet and also stay silent (future work).
         """
         if not is_refactoring_nudge_enabled() or not extract_method_detected(
             refactorings
+        ):
+            return
+        root = str(self.workspace.working_dir)
+        if not direct_edit_paths(step_events, root) & refactoring_file_paths(
+            refactorings, root
         ):
             return
         names = extracted_method_names(refactorings)
@@ -2054,6 +2068,7 @@ class LocalConversation(BaseConversation):
                     # Mark the step as holding the state lock so state-mutating
                     # tools (e.g. switch_llm) running on worker threads skip
                     # re-acquiring it instead of deadlocking (#3485).
+                    step_start_event_count = len(self._state.events)
                     self._step_holds_state_lock = True
                     try:
                         self._ensure_refactoring_baseline()
@@ -2070,7 +2085,10 @@ class LocalConversation(BaseConversation):
                     ) = mine_step_refactorings(
                         self, self._step_count, self._refactoring_parent_commit
                     )
-                    self._maybe_nudge_extract_method(step_refactorings)
+                    self._maybe_nudge_extract_method(
+                        step_refactorings,
+                        self._state.events[step_start_event_count:],
+                    )
 
                     # Check for non-finished terminal conditions
                     # Note: We intentionally do NOT check for FINISHED status here.
@@ -2319,6 +2337,7 @@ class LocalConversation(BaseConversation):
                         # state-mutating tools (e.g. switch_llm) running on
                         # worker threads skip re-acquiring it instead of
                         # deadlocking while this await holds it (#3485).
+                        step_start_event_count = len(self._state.events)
                         self._step_holds_state_lock = True
                         last_user_message_id = self._state.last_user_message_id
                         try:
@@ -2341,7 +2360,10 @@ class LocalConversation(BaseConversation):
                             self._step_count,
                             self._refactoring_parent_commit,
                         )
-                        self._maybe_nudge_extract_method(step_refactorings)
+                        self._maybe_nudge_extract_method(
+                            step_refactorings,
+                            self._state.events[step_start_event_count:],
+                        )
 
                         # astep releases the state lock for the LLM call, so a
                         # message can land mid-step with status still RUNNING and
