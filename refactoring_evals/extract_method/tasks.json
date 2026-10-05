@@ -1,0 +1,10 @@
+{
+  "OpenRefine": [
+    "in @main/src/com/google/refine/browsing/Engine.java, split up the computeFacets into sub-methods.",
+    "In src/com/google/refine/browsing/facets/ScatterplotDrawingRowVisitor.java, split up the constructor into multiple methods.",
+    "in src/com/google/refine/browsing/facets/ScatterplotFacet.java, split up initializeFromConfig into multiple methods.",
+    "split up processRow method into sub methods, in class ExpressionTimeValueBinner.",
+    "In class TimeRangeFacet, split up computeChoices into sub methods.",
+    "in src/com/google/refine/exporters/TemplatingExporter.java, refactor the export method into small methods for separation of concerns."
+  ]
+}
