@@ -1,4 +1,5 @@
 import json
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -78,6 +79,7 @@ def workspace(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENHANDS_REFACTORING_TOOLS", raising=False)
     ws = tmp_path / "workspace"
     ws.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=ws, check=True)
     (ws / "Calculator.java").write_text(BASE_FILE)
     return ws
 
