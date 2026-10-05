@@ -34,7 +34,7 @@ from openhands.sdk.conversation import (
     ConversationTokenCallbackType,
     LocalConversation,
 )
-from openhands.sdk.conversation.edit_provenance import execute_with_edit_provenance
+from openhands.sdk.conversation.edit_attribution import run_with_edit_tracking
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.event import (
     ActionEvent,
@@ -1424,7 +1424,7 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
                     )(tool)(action_event.action, conversation)
                 return tool(action_event.action, conversation)
 
-            observation: Observation = execute_with_edit_provenance(
+            observation: Observation = run_with_edit_tracking(
                 conversation, tool.name, _invoke_tool
             )
             assert isinstance(observation, Observation), (
