@@ -51,6 +51,7 @@ configured via ``OPENHANDS_REFACTORING_TOOLS``.
 import fnmatch
 import json
 import os
+import re
 import subprocess
 import tempfile
 import threading
@@ -59,7 +60,7 @@ from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from weakref import WeakKeyDictionary
 
 from openhands.sdk.logger import get_logger
@@ -78,6 +79,7 @@ DEFAULT_EDIT_LOG = Path.home() / ".openhands" / "edit_attribution.jsonl"
 REFACTORING_TOOL = "refactoring_tool"
 DIRECT_EDIT = "direct_edit"
 BASELINE = "base"
+UNATTRIBUTED = "unattributed"
 
 # Tool names recognized as structural refactoring tools without configuration.
 DEFAULT_REFACTORING_TOOL_NAMES = frozenset({"extract_method"})
@@ -240,6 +242,246 @@ def _exclude_relpath(repo: str) -> str | None:
     """Log path relative to the repo when it lives inside it, else None."""
     relpath = os.path.relpath(str(get_edit_log_path().resolve()), repo)
     return None if relpath.startswith("..") else relpath
+
+
+def _parse_hunks(diff_text: str) -> list[dict[str, Any]]:
+    """Parse a single-file unified diff into ordered -U0 hunks."""
+    hunks: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    hunk_re = re.compile(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+    for line in diff_text.splitlines():
+        if line.startswith("@@"):
+            m = hunk_re.match(line)
+            if m is None:
+                continue
+            if current is not None:
+                hunks.append(current)
+            current = {
+                "old_start": int(m.group(1)),
+                "old_count": int(m.group(2)) if m.group(2) is not None else 1,
+                "new_start": int(m.group(3)),
+                "new_count": int(m.group(4)) if m.group(4) is not None else 1,
+                "removed": [],
+                "added": [],
+            }
+        elif current is not None:
+            if line.startswith("-"):
+                current["removed"].append(line[1:])
+            elif line.startswith("+"):
+                current["added"].append(line[1:])
+    if current is not None:
+        hunks.append(current)
+    return hunks
+
+
+def _simulate_file(
+    base_lines: list[str],
+    records: list[dict[str, Any]],
+    path: str,
+    diff_fetch: Callable[[str, str, str], str | None],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
+    """Replay snapshot-chain diffs over the baseline content.
+
+    ``diff_fetch(parent_sha, commit_sha, path)`` returns the -U0 diff text
+    for one file between two snapshots, or None when unavailable. Returns
+    (all_base_line_states, final_entries). Base line states carry
+    ``deleted_by``: the category of the snapshot whose diff last removed
+    them (None if present at the end). Final entries of kind ``new`` carry
+    the category of the snapshot that inserted them. Returns None when a
+    diff no longer applies (e.g. pruned snapshot commits).
+
+    A deleted baseline line is considered restored (net zero, back to the
+    baseline) only when identical content re-enters near where it was
+    deleted; otherwise identical text inserted elsewhere is a new line of
+    the inserting category. This keeps brace-only or blank-line collisions
+    from misattributing net changes. ``last_deleted_by`` survives
+    restorations, so callers can still attribute a line git represents as
+    moved (delete + re-insert at a different position).
+    """
+    base = [
+        {
+            "kind": "base",
+            "text": t,
+            "deleted_by": None,
+            "last_deleted_by": None,
+            "pos": i,
+        }
+        for i, t in enumerate(base_lines)
+    ]
+    entries = list(base)
+    for rec in records:
+        if path not in {f["path"] for f in rec["files"]}:
+            continue
+        diff_text = diff_fetch(rec["parent"], rec["commit"], path)
+        if diff_text is None:
+            return None
+        shift = 0
+        for hunk in _parse_hunks(diff_text):
+            # A zero-count old range ("-l,0") means "insert after old line l",
+            # not before it.
+            start = hunk["old_start"] - 1 + shift
+            if hunk["old_count"] == 0:
+                start += 1
+            if start < 0 or start + hunk["old_count"] > len(entries):
+                return None
+            removed = entries[start : start + hunk["old_count"]]
+            del entries[start : start + hunk["old_count"]]
+            for offset, entry in enumerate(removed):
+                if entry["kind"] == "base":
+                    entry["deleted_by"] = rec["category"]
+                    entry["last_deleted_by"] = rec["category"]
+                    entry["pos"] = start + offset
+            delta = len(hunk["added"]) - hunk["old_count"]
+            for entry in base:
+                if entry["deleted_by"] is None:
+                    continue
+                if entry["pos"] >= start + hunk["old_count"]:
+                    entry["pos"] += delta
+                elif entry["pos"] >= start:
+                    entry["pos"] = start
+            insert_idx = start
+            for text in hunk["added"]:
+                candidates = [e for e in base if e["deleted_by"] and e["text"] == text]
+                if candidates:
+                    best = min(
+                        candidates,
+                        key=lambda e: (abs(e["pos"] - insert_idx), e["pos"]),
+                    )
+                    best["deleted_by"] = None
+                    entries.insert(insert_idx, best)
+                else:
+                    entries.insert(
+                        insert_idx,
+                        {
+                            "kind": "new",
+                            "text": text,
+                            "category": rec["category"],
+                        },
+                    )
+                insert_idx += 1
+            shift += delta
+    return base, entries
+
+
+def net_line_attribution(
+    repo: str,
+    records: list[dict[str, Any]],
+    base_sha: str,
+    commit_sha: str | None,
+) -> dict[str, dict[str, int]]:
+    """Net lines contributed to the final commit, per attribution category.
+
+    Counts come from git, not from the ledger's running totals: the
+    baseline -> commit diff is the ground truth for which lines the session
+    inserted and deleted. Each inserted line is attributed via the ledger's
+    final per-line blame map (``attributed_lines``: last writer of that line
+    in the final content); each deleted line via a replay of the
+    snapshot-chain diffs (last snapshot that removed it). Lines deleted and
+    later restored to their baseline content are net zero and stay with the
+    baseline. Files where the replay cannot be validated against the commit
+    (e.g. an IDE changed files after the last tool call) fall back to
+    ``unattributed`` so totals always reconcile with the commit.
+
+    ``records`` are the JSONL records logged by :class:`EditLedger` for one
+    session (same ``session_id``); each must carry ``category``, ``parent``,
+    ``commit`` and per-file entries with ``path`` and ``attributed_lines``.
+    ``commit_sha`` may be None (no changes committed), yielding all-zero
+    counts.
+    """
+    categories = [REFACTORING_TOOL, DIRECT_EDIT, UNATTRIBUTED]
+    result = {c: {"inserted": 0, "deleted": 0} for c in categories}
+    if commit_sha is None:
+        return result
+
+    def numstat(sha_a: str, sha_b: str) -> dict[str, tuple[int, int]]:
+        out = _run_git(repo, "diff", "--numstat", "--no-renames", sha_a, sha_b)
+        files: dict[str, tuple[int, int]] = {}
+        for line in out.splitlines():
+            ins, dels, path = line.split("\t", 2)
+            if ins == "-" or dels == "-":
+                continue
+            files[path] = (int(ins), int(dels))
+        return files
+
+    def show(sha: str, path: str) -> list[str]:
+        try:
+            content = _run_git(repo, "show", f"{sha}:{path}")
+        except RuntimeError:
+            return []
+        return content.splitlines() if content else []
+
+    def diff_text(sha_a: str, sha_b: str, path: str) -> str | None:
+        try:
+            return _run_git(repo, "diff", "-U0", sha_a, sha_b, "--", path)
+        except RuntimeError:
+            return None
+
+    def diff_positions(diff: str) -> tuple[list[int], list[int]]:
+        """1-based (removed old-file, added new-file) line numbers."""
+        removed_pos: list[int] = []
+        added_pos: list[int] = []
+        for hunk in _parse_hunks(diff):
+            for i in range(hunk["old_count"]):
+                removed_pos.append(hunk["old_start"] + i)
+            for i in range(hunk["new_count"]):
+                added_pos.append(hunk["new_start"] + i)
+        return removed_pos, added_pos
+
+    commit_files = numstat(base_sha, commit_sha)
+    touched_paths = set(commit_files)
+    for rec in records:
+        touched_paths.update(f["path"] for f in rec["files"])
+
+    for path in sorted(touched_paths):
+        ins_total, dels_total = commit_files.get(path, (0, 0))
+        if not ins_total and not dels_total:
+            continue
+        base_lines = show(base_sha, path)
+        commit_lines = show(commit_sha, path)
+        recs = [r for r in records if path in {f["path"] for f in r["files"]}]
+        simulated = _simulate_file(base_lines, recs, path, diff_text)
+        # The replay must reproduce the committed content exactly, otherwise
+        # the snapshot chain diverged from the commit and per-line
+        # attribution is unreliable.
+        if simulated is None or [e["text"] for e in simulated[1]] != commit_lines:
+            logger.warning(
+                "Could not attribute %s (commit != replayed snapshots); "
+                "counting %d+/-%d- as unattributed",
+                path,
+                ins_total,
+                dels_total,
+            )
+            result[UNATTRIBUTED]["inserted"] += ins_total
+            result[UNATTRIBUTED]["deleted"] += dels_total
+            continue
+        base_state, entries = simulated
+
+        attributed: dict[int, str] = {}
+        for rec in reversed(recs):
+            for f in rec["files"]:
+                if f["path"] == path and f.get("attributed_lines"):
+                    attributed = {int(k): v for k, v in f["attributed_lines"].items()}
+                    break
+            if attributed:
+                break
+
+        removed_pos, added_pos = diff_positions(
+            diff_text(base_sha, commit_sha, path) or ""
+        )
+        for pos in added_pos:
+            category = attributed.get(pos)
+            if category is None:
+                entry = entries[pos - 1] if pos - 1 < len(entries) else None
+                if entry is not None and entry["kind"] == "new":
+                    category = entry["category"]
+            result[category or UNATTRIBUTED]["inserted"] += 1
+        for pos in removed_pos:
+            base_entry = base_state[pos - 1] if pos - 1 < len(base_state) else None
+            category = None
+            if base_entry is not None:
+                category = base_entry["deleted_by"] or base_entry["last_deleted_by"]
+            result[category or UNATTRIBUTED]["deleted"] += 1
+    return result
 
 
 class EditLedger:

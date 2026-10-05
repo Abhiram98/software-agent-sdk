@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from types import SimpleNamespace
 
@@ -8,10 +9,12 @@ from openhands.sdk.conversation.edit_attribution import (
     BASELINE,
     DIRECT_EDIT,
     REFACTORING_TOOL,
+    UNATTRIBUTED,
     EditLedger,
     categorize_tool,
     get_edit_log_path,
     is_edit_tracking_enabled,
+    net_line_attribution,
     run_with_edit_tracking,
 )
 
@@ -249,3 +252,120 @@ def test_baseline_seeded_before_first_tool(workspace):
     assert ledger.final_lines == {}
     assert ledger.written_lines == {}
     assert set(ledger.line_categories(str(workspace / "Calculator.java"))) == {BASELINE}
+
+
+def _commit_all(repo, message: str) -> str:
+    env = dict(os.environ) | {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.com",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.com",
+    }
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-q", "--allow-empty", "-m", message],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        env=env,
+    )
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _numstat(repo, sha_a: str, sha_b: str) -> tuple[int, int]:
+    out = subprocess.run(
+        ["git", "diff", "--numstat", "--no-renames", sha_a, sha_b],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    ins, dels = 0, 0
+    for line in out.splitlines():
+        a, d, _ = line.split("\t", 2)
+        if a != "-" and d != "-":
+            ins += int(a)
+            dels += int(d)
+    return ins, dels
+
+
+def _zero_result() -> dict:
+    return {
+        c: {"inserted": 0, "deleted": 0}
+        for c in (REFACTORING_TOOL, DIRECT_EDIT, UNATTRIBUTED)
+    }
+
+
+def test_net_line_attribution_reconciles_and_splits(workspace):
+    """Net counts equal the commit numstat, and each net-inserted line is
+    attributed to the snapshot that last wrote it."""
+    base_sha = _commit_all(workspace, "base")
+    (workspace / "Calculator.java").write_text(SPLIT_FILE)
+    split_sha = _commit_all(workspace, "split")
+    (workspace / "Calculator.java").write_text(EXTRACTED_FILE)
+    extracted_sha = _commit_all(workspace, "extract")
+
+    records = [
+        {
+            "category": DIRECT_EDIT,
+            "parent": base_sha,
+            "commit": split_sha,
+            "files": [{"path": "Calculator.java", "attributed_lines": {}}],
+        },
+        {
+            "category": REFACTORING_TOOL,
+            "parent": split_sha,
+            "commit": extracted_sha,
+            "files": [
+                {
+                    "path": "Calculator.java",
+                    "attributed_lines": {
+                        "3": DIRECT_EDIT,
+                        "4": DIRECT_EDIT,
+                        "5": DIRECT_EDIT,
+                        "6": REFACTORING_TOOL,
+                    },
+                }
+            ],
+        },
+    ]
+    result = net_line_attribution(str(workspace), records, base_sha, extracted_sha)
+
+    ins, dels = _numstat(workspace, base_sha, extracted_sha)
+    assert sum(v["inserted"] for v in result.values()) == ins
+    assert sum(v["deleted"] for v in result.values()) == dels
+    assert result[DIRECT_EDIT]["inserted"] == 3
+    assert result[REFACTORING_TOOL]["inserted"] == 1
+    assert sum(v["deleted"] for v in result.values()) == 0
+
+
+def test_net_line_attribution_revert_roundtrip_is_net_zero(workspace):
+    """A delete-then-restore roundtrip leaves no net attributed lines."""
+    base_sha = _commit_all(workspace, "base")
+    (workspace / "Calculator.java").write_text(SPLIT_FILE)
+    split_sha = _commit_all(workspace, "split")
+    (workspace / "Calculator.java").write_text(BASE_FILE)
+    revert_sha = _commit_all(workspace, "revert")
+
+    records = [
+        {
+            "category": DIRECT_EDIT,
+            "parent": base_sha,
+            "commit": split_sha,
+            "files": [{"path": "Calculator.java", "attributed_lines": {}}],
+        },
+        {
+            "category": DIRECT_EDIT,
+            "parent": split_sha,
+            "commit": revert_sha,
+            "files": [{"path": "Calculator.java", "attributed_lines": {}}],
+        },
+    ]
+    result = net_line_attribution(str(workspace), records, base_sha, revert_sha)
+    assert result == _zero_result()
