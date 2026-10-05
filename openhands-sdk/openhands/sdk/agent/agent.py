@@ -34,6 +34,7 @@ from openhands.sdk.conversation import (
     ConversationTokenCallbackType,
     LocalConversation,
 )
+from openhands.sdk.conversation.edit_provenance import execute_with_edit_provenance
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.event import (
     ActionEvent,
@@ -1409,18 +1410,23 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
 
         # Execute actions!
         try:
-            if should_enable_observability():
-                tool_name = extract_action_name(action_event)
-                observation: Observation = observe(
-                    name=tool_name,
-                    span_type="TOOL",
-                    # Only the action is input; the conversation would serialize
-                    # as a bare object repr carrying a memory address.
-                    ignore_inputs=["conversation"],
-                    metadata={"tool_call_id": action_event.tool_call.id},
-                )(tool)(action_event.action, conversation)
-            else:
-                observation = tool(action_event.action, conversation)
+
+            def _invoke_tool() -> Observation:
+                if should_enable_observability():
+                    tool_name = extract_action_name(action_event)
+                    return observe(
+                        name=tool_name,
+                        span_type="TOOL",
+                        # Only the action is input; the conversation would serialize
+                        # as a bare object repr carrying a memory address.
+                        ignore_inputs=["conversation"],
+                        metadata={"tool_call_id": action_event.tool_call.id},
+                    )(tool)(action_event.action, conversation)
+                return tool(action_event.action, conversation)
+
+            observation: Observation = execute_with_edit_provenance(
+                conversation, tool.name, _invoke_tool
+            )
             assert isinstance(observation, Observation), (
                 f"Tool '{tool.name}' executor must return an Observation"
             )

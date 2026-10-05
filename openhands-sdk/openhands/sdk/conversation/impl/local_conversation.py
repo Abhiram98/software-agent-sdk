@@ -16,6 +16,7 @@ from openhands.sdk.context.memory import load_memory
 from openhands.sdk.context.prompts.prompt import render_template
 from openhands.sdk.conversation.base import BaseConversation
 from openhands.sdk.conversation.cancellation import CancellationToken
+from openhands.sdk.conversation.edit_provenance import execute_with_edit_provenance
 from openhands.sdk.conversation.event_store import EventLog
 from openhands.sdk.conversation.exceptions import ConversationRunError
 from openhands.sdk.conversation.refactoring_miner import (
@@ -3229,7 +3230,7 @@ class LocalConversation(BaseConversation):
         # Execute the tool
         if not tool.executor:
             raise NotImplementedError(f"Tool '{tool_name}' has no executor")
-        return tool(action, self)
+        return execute_with_edit_provenance(self, tool.name, lambda: tool(action, self))
 
     def __del__(self) -> None:
         """Ensure cleanup happens when conversation is destroyed."""
