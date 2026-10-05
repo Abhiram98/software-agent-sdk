@@ -26,15 +26,12 @@ only by ``git fsck``, and ``git gc`` may eventually prune them; the JSONL
 log keeps the attribution data independently.
 
 Because edits are detected by snapshotting, shell commands and MCP tools
-are handled automatically; tools do not have to report their own edits.
-Only tools that can plausibly mutate files are tracked (the built-in
-editors, the terminal, and refactoring tools), so read-only calls cost
-nothing. Custom mutating tools opt in via ``OPENHANDS_MUTATING_TOOLS``.
-Two approximations follow from this design: (1) files changed between
-tracked tool calls by background processes are credited to the next
-tracked tool call that notices them; (2) when parallel tool calls change
-the same files at the same time, all of those changes are credited to
-whichever call is checked first.
+are handled automatically; tools do not have to report their own edits. Two
+approximations follow from this design: (1) files changed between tool
+calls by background processes are credited to the next tool call that
+notices them; (2) when parallel tool calls change the same files at the
+same time, all of those changes are credited to whichever call is checked
+first.
 
 One record is appended per tool call that changed files, as a JSON line
 joinable with the refactoring log via ``session_id``. Each changed file
@@ -85,22 +82,6 @@ BASELINE = "base"
 # Tool names recognized as structural refactoring tools without configuration.
 DEFAULT_REFACTORING_TOOL_NAMES = frozenset({"extract_method"})
 
-# Tools that can plausibly mutate workspace files; only these run inside
-# attribution windows, keeping read-only calls free of any overhead.
-# Refactoring tools always qualify. Custom mutating tools opt in via
-# ``OPENHANDS_MUTATING_TOOLS`` (exact names or glob patterns).
-DEFAULT_MUTATING_TOOLS = frozenset(
-    {
-        "apply_patch",
-        "edit",
-        "file_editor",
-        "planning_file_editor",
-        "terminal",
-        "write_file",
-    }
-)
-MUTATING_TOOLS_ENV_VAR = "OPENHANDS_MUTATING_TOOLS"
-
 # Snapshot commits are authored by category so `git blame` attributes each
 # line. Committer identity is deterministic so git never fails on repos or
 # hosts without a configured identity.
@@ -146,15 +127,6 @@ def _matches_any(tool_name: str, entries: tuple[str, ...]) -> bool:
     return any(
         fnmatch.fnmatchcase(tool_name, e) if "*" in e or "?" in e else tool_name == e
         for e in entries
-    )
-
-
-def is_mutating_tool(tool_name: str) -> bool:
-    """Whether this tool should run inside an attribution window."""
-    if categorize_tool(tool_name) == REFACTORING_TOOL:
-        return True
-    return _matches_any(
-        tool_name, _env_tool_patterns(MUTATING_TOOLS_ENV_VAR, DEFAULT_MUTATING_TOOLS)
     )
 
 
@@ -270,25 +242,6 @@ def _exclude_relpath(repo: str) -> str | None:
     return None if relpath.startswith("..") else relpath
 
 
-def _worktree_changed(repo: str, parent: str, exclude_relpath: str | None) -> bool:
-    """Cheap check for whether the worktree differs from ``parent``.
-
-    Two read-only git calls; far cheaper than building a snapshot index for
-    the common case of tools that did not touch any files. The snapshot
-    itself remains the authority — this gate may only over-report.
-    """
-    pathspecs = [
-        "--",
-        ".",
-        *(f":(exclude){exclude_relpath}" if exclude_relpath else []),
-    ]
-    if _run_git(repo, "diff", "--name-only", parent, *pathspecs):
-        return True
-    return (
-        _run_git(repo, "ls-files", "--others", "--exclude-standard", *pathspecs) != ""
-    )
-
-
 class EditLedger:
     """Credits each changed line to the tool call that wrote it.
 
@@ -315,14 +268,10 @@ class EditLedger:
     def track_edits(self, tool_name: str) -> Generator[None]:
         """Credit any file edits made inside this block to ``tool_name``.
 
-        Only tools that can plausibly mutate files are tracked; read-only
-        calls are a no-op. Tracking must never alter tool behavior:
-        snapshot failures are logged and swallowed, including in the finally
-        block, so a tool's own exception propagates untouched.
+        Tracking must never alter tool behavior: snapshot failures are
+        logged and swallowed, including in the finally block, so a tool's
+        own exception propagates untouched.
         """
-        if not is_mutating_tool(tool_name):
-            yield
-            return
         category = categorize_tool(tool_name)
         try:
             with self._lock:
@@ -360,18 +309,7 @@ class EditLedger:
             )
             return
         exclude = _exclude_relpath(self._repo)
-        # On a clean worktree the baseline is HEAD itself — no snapshot
-        # needed. Any line blame traces back beyond our chain (unknown
-        # authors) maps to BASELINE either way.
-        try:
-            head = _run_git(self._repo, "rev-parse", "HEAD")
-            clean = not _run_git(self._repo, "status", "--porcelain")
-        except RuntimeError:
-            head, clean = None, False
-        if head and clean:
-            self._parent = head
-        else:
-            self._parent = _snapshot(self._repo, None, _BASE_AUTHOR, exclude)
+        self._parent = _snapshot(self._repo, None, _BASE_AUTHOR, exclude)
 
     def _check_for_edits(self, tool_name: str, category: str) -> None:
         with self._lock:
@@ -379,8 +317,6 @@ class EditLedger:
             if self._unusable or repo is None or previous is None:
                 return
             exclude = _exclude_relpath(repo)
-            if not _worktree_changed(repo, previous, exclude):
-                return  # tool did not touch any files
             sha = _snapshot(repo, previous, _CATEGORY_AUTHORS[category], exclude)
             if sha is None:
                 return  # nothing changed
