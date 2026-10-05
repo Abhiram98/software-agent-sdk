@@ -309,7 +309,14 @@ class EditLedger:
             )
             return
         exclude = _exclude_relpath(self._repo)
-        self._parent = _snapshot(self._repo, None, _BASE_AUTHOR, exclude)
+        # Parent the baseline on HEAD when one exists, so blame on lines the
+        # session never touched continues into the repo's real history. Only
+        # a pre-session uncommitted delta gets the base author.
+        try:
+            head = _run_git(self._repo, "rev-parse", "HEAD")
+        except RuntimeError:
+            head = None  # no commits yet
+        self._parent = _snapshot(self._repo, head, _BASE_AUTHOR, exclude) or head
 
     def _check_for_edits(self, tool_name: str, category: str) -> None:
         with self._lock:
