@@ -52,10 +52,11 @@ logger = get_logger(__name__)
 EVAL_DIR = Path(__file__).parent
 TASKS_PATH = EVAL_DIR / "tasks.json"
 MANIFEST_PATH = EVAL_DIR / "manifest.json"
+ENV_PATH = EVAL_DIR.parent / ".env"
 REPOS_ROOT = Path("/Users/abhiram/Documents/TBE/evaluation_projects")
 BRANCH = "master"
 IDEA_APP = "IntelliJ IDEA OSS.app"
-MODEL = os.environ.get("EVAL_MODEL", "openrouter/deepseek/deepseek-v4-flash-latest")
+MODEL = os.environ.get("EVAL_MODEL", "openrouter/~deepseek/deepseek-v4-flash-latest")
 MCP_URL = os.environ.get("INTELLIJ_MCP_URL", "http://127.0.0.1:64343/sse")
 PROJECT_PATH_HEADER = "IJ_MCP_SERVER_PROJECT_PATH"
 
@@ -86,6 +87,11 @@ def is_dirty(repo: Path) -> bool:
 
 def prepare_repo(repo: Path) -> str:
     """Force the repo onto a clean BRANCH and return the base sha."""
+    if is_dirty(repo):
+        logger.warning(
+            "%s has uncommitted changes; stashing them before checkout", repo
+        )
+        run_git(repo, "stash", "push", "-u", "-m", "refactoring-eval auto-stash")
     run_git(repo, "checkout", BRANCH)
     run_git(repo, "reset", "--hard", BRANCH)
     run_git(repo, "clean", "-fd")
@@ -137,10 +143,28 @@ def build_mcp_config(repo: Path) -> dict[str, MCPServer]:
     }
 
 
+def load_env(path: Path = ENV_PATH) -> None:
+    """Populate os.environ from a KEY=VALUE .env file (never overrides)."""
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip().strip("'\"")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
 def build_agent(repo: Path) -> tuple[Agent, LLM]:
+    load_env()
     api_key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("LLM_API_KEY")
     if not api_key:
-        raise RuntimeError("Set OPENROUTER_API_KEY (or LLM_API_KEY) before running.")
+        raise RuntimeError(
+            f"Set OPENROUTER_API_KEY (or LLM_API_KEY) in the environment "
+            f"or in {ENV_PATH} before running."
+        )
     llm = LLM(usage_id="agent", model=MODEL, api_key=SecretStr(api_key))
     agent = Agent(
         llm=llm,

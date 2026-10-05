@@ -222,3 +222,7 @@ clients/typescript/dist/
 clients/typescript/coverage/
 clients/typescript/.audit/
 clients/typescript/junit.xml
+
+# Related-work research notes (local only)
+related_work/
+/refactoring_evals/extract_method/results/
