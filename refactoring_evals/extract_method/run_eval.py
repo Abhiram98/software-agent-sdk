@@ -18,7 +18,8 @@ session_id joins back to the raw JSONL logs for per-step analysis. Results
 land in ``results/<run_id>/``.
 
 Prerequisites:
-- ``OPENROUTER_API_KEY`` set (model: openrouter deepseek-v4-flash-latest)
+- ``OPENROUTER_API_KEY`` set (model: ``EVAL_MODEL``, default openrouter
+  deepseek-v4-flash-latest)
 - RefactoringMiner available (default path from
   ``openhands.sdk.conversation.refactoring_miner``) for the guardrail mode
 - IntelliJ IDEA OSS installed; the harness opens the project and waits for
@@ -40,7 +41,7 @@ import urllib.request
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import IO, Any, cast
 
 from pydantic import SecretStr
 
@@ -66,6 +67,7 @@ MANIFEST_PATH = EVAL_DIR / "manifest.json"
 ENV_PATH = EVAL_DIR.parent / ".env"
 REPOS_ROOT = Path("/Users/abhiram/Documents/TBE/evaluation_projects")
 BRANCH = "master"
+UPSTREAM_REF = "origin/master"
 IDEA_APP = "IntelliJ IDEA OSS.app"
 MODEL = os.environ.get("EVAL_MODEL", "openrouter/~deepseek/deepseek-v4-flash-latest")
 MCP_URL = os.environ.get("INTELLIJ_MCP_URL", "http://127.0.0.1:64343/sse")
@@ -102,7 +104,9 @@ def prepare_repo(repo: Path) -> str:
         )
         run_git(repo, "stash", "push", "-u", "-m", "refactoring-eval auto-stash")
     run_git(repo, "checkout", BRANCH)
-    run_git(repo, "reset", "--hard", BRANCH)
+    # Reset to the pristine upstream ref: eval commits land on BRANCH, so
+    # resetting to BRANCH itself would leak earlier runs into later ones.
+    run_git(repo, "reset", "--hard", UPSTREAM_REF)
     run_git(repo, "clean", "-fd")
     return run_git(repo, "rev-parse", "HEAD")
 
@@ -266,6 +270,7 @@ def run_one(
         "base_sha": base_sha,
         "commit_sha": commit_sha,
         "session_id": session_id,
+        "model": MODEL,
         "llm_cost": llm.metrics.accumulated_cost,
         "duration_s": round(duration_s, 1),
         "diff_shortstat": diff,
@@ -375,6 +380,7 @@ def write_report(results: list[dict[str, Any]], run_dir: Path, run_id: str) -> P
                     for category in (REFACTORING_TOOL, DIRECT_EDIT)
                 },
                 "extract_methods_detected": r["extract_methods_detected"],
+                "model": r.get("model", MODEL),
                 "llm_cost": r["llm_cost"],
                 "duration_s": r["duration_s"],
             }
@@ -384,6 +390,31 @@ def write_report(results: list[dict[str, Any]], run_dir: Path, run_id: str) -> P
     report_path = run_dir / "report.json"
     report_path.write_text(json.dumps(report, indent=2) + "\n")
     return report_path
+
+
+class _Tee:
+    def __init__(self, *streams: IO[str]) -> None:
+        self._streams = streams
+
+    def write(self, data: str) -> int:
+        for stream in self._streams:
+            stream.write(data)
+        return len(data)
+
+    def flush(self) -> None:
+        for stream in self._streams:
+            stream.flush()
+
+    def __getattr__(self, name: str) -> Any:
+        # Delegate everything else (isatty, encoding, fileno, ...) to stdout.
+        return getattr(self._streams[0], name)
+
+
+def tee_output_to(run_dir: Path) -> None:
+    """Mirror stdout/stderr into run_dir/run.log for post-hoc inspection."""
+    log_file = (run_dir / "run.log").open("a")
+    sys.stdout = cast(Any, _Tee(sys.stdout, log_file))
+    sys.stderr = cast(Any, _Tee(sys.stderr, log_file))
 
 
 def main() -> None:
@@ -401,6 +432,7 @@ def main() -> None:
 
     run_dir = EVAL_DIR / "results" / args.run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+    tee_output_to(run_dir)
 
     manifest = load_manifest()
     results: list[dict[str, Any]] = []
