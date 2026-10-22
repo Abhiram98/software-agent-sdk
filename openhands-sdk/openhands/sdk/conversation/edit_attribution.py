@@ -82,7 +82,20 @@ BASELINE = "base"
 UNATTRIBUTED = "unattributed"
 
 # Tool names recognized as structural refactoring tools without configuration.
-DEFAULT_REFACTORING_TOOL_NAMES = frozenset({"extract_method"})
+# These are the IntelliJ IDE MCP refactoring tools; edits made through them
+# are attributed to REFACTORING_TOOL rather than DIRECT_EDIT.
+DEFAULT_REFACTORING_TOOL_NAMES = frozenset(
+    {
+        "extract_method",
+        "inline_method",
+        "introduce_parameter",
+        "move_method",
+        "pull_up_method",
+        "push_down_method",
+        "rename_refactoring",
+        "safe_delete",
+    }
+)
 
 # Snapshot commits are authored by category so `git blame` attributes each
 # line. Committer identity is deterministic so git never fails on repos or

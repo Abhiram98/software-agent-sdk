@@ -1,0 +1,160 @@
+{
+  "_schema": {
+    "id": "stable task identifier, used in result filenames",
+    "category": "static method | instance method | abstract method | interface method | field",
+    "member": "the member being moved, as Class.member",
+    "source": "fully-qualified class the member starts in",
+    "target": "fully-qualified class the member should end up in",
+    "family": "expected refactoring family (see MOVE_FAMILIES in run_eval.py)",
+    "ide_tool": "IntelliJ MCP tool that performs this move, or null when none exists",
+    "referencing_files": "files other than the source that reference the member",
+    "verified_type": "RefactoringMiner type string observed when the move is applied by hand",
+    "prompt": "task text given to the agent; deliberately does not mention any tool"
+  },
+  "OpenRefine": [
+    {
+      "id": "static-01-stringutils-tostring",
+      "category": "static method",
+      "member": "StringUtils.toString",
+      "source": "com.google.refine.util.StringUtils",
+      "target": "com.google.refine.util.ParsingUtilities",
+      "family": "move_method",
+      "ide_tool": "move_method",
+      "referencing_files": 7,
+      "verified_type": "Move Method",
+      "prompt": "In main/src/com/google/refine/util/StringUtils.java, move the static method toString(Object) into com.google.refine.util.ParsingUtilities, and update everything that calls it."
+    },
+    {
+      "id": "static-02-jsonvalueconverter-convert",
+      "category": "static method",
+      "member": "JsonValueConverter.convert",
+      "source": "com.google.refine.expr.util.JsonValueConverter",
+      "target": "com.google.refine.util.JSONUtilities",
+      "family": "move_method",
+      "ide_tool": "move_method",
+      "referencing_files": 10,
+      "verified_type": "Move Method",
+      "prompt": "The static method convert(JsonNode) in main/src/com/google/refine/expr/util/JsonValueConverter.java belongs with the other JSON helpers. Move it into com.google.refine.util.JSONUtilities and update its callers."
+    },
+    {
+      "id": "static-03-jsonutilities-toarray",
+      "category": "static method",
+      "member": "JSONUtilities.toArray",
+      "source": "com.google.refine.util.JSONUtilities",
+      "target": "com.google.refine.util.ParsingUtilities",
+      "family": "move_method",
+      "ide_tool": "move_method",
+      "referencing_files": 3,
+      "verified_type": "Move Method",
+      "prompt": "Move the static method toArray(ArrayNode) from com.google.refine.util.JSONUtilities to com.google.refine.util.ParsingUtilities, keeping all call sites working."
+    },
+    {
+      "id": "instance-01-row-getcelltuple",
+      "category": "instance method",
+      "member": "Row.getCellTuple",
+      "source": "com.google.refine.model.Row",
+      "target": "com.google.refine.model.Project",
+      "family": "move_method",
+      "ide_tool": "move_method",
+      "referencing_files": 0,
+      "verified_type": "Move Method",
+      "prompt": "Row.getCellTuple(Project) in main/src/com/google/refine/model/Row.java only builds a CellTuple from the project it is handed. Move the method onto com.google.refine.model.Project so it reads project.getCellTuple(row)."
+    },
+    {
+      "id": "instance-02-pool-poolreconcandidates",
+      "category": "instance method",
+      "member": "Pool.poolReconCandidates",
+      "source": "com.google.refine.util.Pool",
+      "target": "com.google.refine.model.Recon",
+      "family": "move_method",
+      "ide_tool": "move_method",
+      "referencing_files": 1,
+      "verified_type": "Move And Rename Method",
+      "prompt": "Pool.poolReconCandidates(Recon) in main/src/com/google/refine/util/Pool.java reads almost entirely from the Recon it is given. Move the method onto com.google.refine.model.Recon and update the caller."
+    },
+    {
+      "id": "instance-03-standardreconconfig-computefeatures",
+      "category": "instance method",
+      "member": "StandardReconConfig.computeFeatures",
+      "source": "com.google.refine.model.recon.StandardReconConfig",
+      "target": "com.google.refine.model.Recon",
+      "family": "move_method",
+      "ide_tool": "move_method",
+      "referencing_files": 0,
+      "verified_type": "Move Method",
+      "prompt": "computeFeatures(Recon, String) in main/src/com/google/refine/model/recon/StandardReconConfig.java sets features on the Recon it receives rather than using its own state. Move it onto com.google.refine.model.Recon."
+    },
+    {
+      "id": "iface-01-exporter-getcontenttype-pushdown",
+      "category": "interface method",
+      "member": "Exporter.getContentType",
+      "source": "com.google.refine.exporters.Exporter",
+      "target": "com.google.refine.exporters.StreamExporter, com.google.refine.exporters.UrlExporter, com.google.refine.exporters.WriterExporter",
+      "family": "push_down_method",
+      "ide_tool": "push_down_method",
+      "referencing_files": 16,
+      "verified_type": "Push Down Method",
+      "prompt": "The Exporter interface in main/src/com/google/refine/exporters/Exporter.java declares getContentType(). Push that declaration down into its three sub-interfaces (StreamExporter, UrlExporter, WriterExporter) so Exporter itself no longer declares it."
+    },
+    {
+      "id": "abstract-01-clustererconfig-gettype",
+      "category": "abstract method",
+      "member": "ClustererConfig.getType",
+      "source": "com.google.refine.clustering.ClustererConfig",
+      "target": "com.google.refine.clustering.Clusterer",
+      "family": "move_method",
+      "ide_tool": "move_method",
+      "referencing_files": 4,
+      "verified_type": "Move Method",
+      "prompt": "Move the abstract method declaration getType() from com.google.refine.clustering.ClustererConfig to com.google.refine.clustering.Clusterer, keeping the hierarchy consistent."
+    },
+    {
+      "id": "abstract-02-clusterer-getjsonrepresentation-pullup",
+      "category": "abstract method",
+      "member": "BinningClusterer.getJsonRepresentation / kNNClusterer.getJsonRepresentation",
+      "source": "com.google.refine.clustering.binning.BinningClusterer",
+      "target": "com.google.refine.clustering.Clusterer",
+      "family": "pull_up_method",
+      "ide_tool": "pull_up_method",
+      "referencing_files": 4,
+      "verified_type": "Pull Up Method",
+      "prompt": "BinningClusterer and kNNClusterer both declare getJsonRepresentation(), but their shared superclass com.google.refine.clustering.Clusterer does not. Pull that method up into Clusterer."
+    },
+    {
+      "id": "abstract-03-clusterer-initializefromconfig-pushdown",
+      "category": "abstract method",
+      "member": "Clusterer.initializeFromConfig",
+      "source": "com.google.refine.clustering.Clusterer",
+      "target": "com.google.refine.clustering.binning.BinningClusterer, com.google.refine.clustering.knn.kNNClusterer",
+      "family": "push_down_method",
+      "ide_tool": "push_down_method",
+      "referencing_files": 2,
+      "verified_type": "Push Down Method",
+      "prompt": "Push the protected method initializeFromConfig(Project, ClustererConfig) down from com.google.refine.clustering.Clusterer into its two subclasses, BinningClusterer and kNNClusterer."
+    },
+    {
+      "id": "field-01-parsingutilities-defaultwriter",
+      "category": "field",
+      "member": "ParsingUtilities.defaultWriter",
+      "source": "com.google.refine.util.ParsingUtilities",
+      "target": "com.google.refine.util.JSONUtilities",
+      "family": "move_attribute",
+      "ide_tool": null,
+      "referencing_files": 11,
+      "verified_type": "Move Attribute",
+      "prompt": "Move the static field defaultWriter from com.google.refine.util.ParsingUtilities to com.google.refine.util.JSONUtilities, and update everything that reads it."
+    },
+    {
+      "id": "field-02-recon-judgmentbatchsize",
+      "category": "field",
+      "member": "Recon.judgmentBatchSize",
+      "source": "com.google.refine.model.Recon",
+      "target": "com.google.refine.model.ReconStats",
+      "family": "move_attribute",
+      "ide_tool": null,
+      "referencing_files": 5,
+      "verified_type": "Move Attribute",
+      "prompt": "The instance field judgmentBatchSize on com.google.refine.model.Recon is really a property of the recon statistics. Move it to com.google.refine.model.ReconStats and update its users."
+    }
+  ]
+}
