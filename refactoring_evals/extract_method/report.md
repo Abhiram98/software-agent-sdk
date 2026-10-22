@@ -139,6 +139,53 @@ Secondary observations:
 - Per-task (baseline, narrowed): DeepSeek +163/−87 all direct, EM 2/2/2/3/4/8;
   GLM +122/−66 direct and one 4-line tool extraction, EM 2/0/2/1/2/4.
 
+## Tool description verbosity (baseline rerun)
+
+Hypothesis: baseline non-use of `extract_method` might be due to verbose
+tool descriptions obscuring the tool's purpose. The IntelliJ MCP server
+supports dynamic description verbosity levels controlled by writing to
+`~/.mcp-description-variant.txt` (`terse`, `medium`, `verbose`). We reran
+the baseline arm with the IDE server configured for **terse** descriptions.
+
+### DeepSeek v4 flash — Terse descriptions
+
+| Metric (baseline arm, 6 tasks) | DeepSeek, verbose | DeepSeek, terse |
+|---|---:|---:|
+| **% of net edited lines via tool** | **0%** | **0%** |
+| extract_method calls | 0 | 0 |
+| Net lines via tool (ins+del) | 0 | 0 |
+| Net lines via direct edits (ins+del) | 226 | 254 |
+| Direct-edit calls | 10 | 6 |
+| Extract-methods detected (RefactoringMiner) | 19 | 18 |
+| Unattributed net lines | 3 | 0 |
+| Total LLM cost | $0.14 | $0.09 |
+| Total wall time | 20 min | 9.9 min |
+
+**The hypothesis is not supported.** With terse tool descriptions,
+DeepSeek still made 0 `extract_method` tool calls — all 6 tasks were
+completed via direct `file_editor` edits. RefactoringMiner detected 18
+extract-methods in the resulting diffs, confirming the model performed
+the correct refactoring pattern but chose not to use the IDE tool.
+
+Per-task results (terse):
+
+| Task | Target | Terse baseline net ins/del, all direct edits (EM) |
+|---|---|---|
+| 0 | `Engine.computeFacets` | +18/−10 (2) |
+| 1 | `ScatterplotDrawingRowVisitor` ctor | +7/−0 (2) |
+| 2 | `ScatterplotFacet.initializeFromConfig` | +28/−19 (3) |
+| 3 | `ExpressionTimeValueBinner.processRow` | +17/−14 (2) |
+| 4 | `TimeRangeFacet.computeChoices` | +25/−27 (4) |
+| 5 | `TemplatingExporter.export` | +57/−32 (5) |
+
+Secondary observations:
+- Terse runs were faster (9.9 vs 20 min) and cheaper ($0.09 vs $0.14),
+  likely due to fewer input tokens from shorter tool descriptions.
+- All 6 tasks completed successfully with correct refactoring structure
+  (18 EMs detected), confirming terse descriptions do not impair the
+  model's ability to understand the task — only its tool selection.
+- Run artifacts: `results/baseline-terse-deepseek/`
+
 ## Artifacts
 
 - Harness: `run_eval.py` (also tees full transcripts to
@@ -147,7 +194,8 @@ Secondary observations:
   (DeepSeek baseline), `results/guardrail-tasks-0-5/` (DeepSeek guardrail),
   `results/glm53flash-0-5/` (GLM 5.3 flash, both arms),
   `results/baseline-fewtools-deepseek/` + `results/baseline-fewtools-glm/`
-  (baseline with 9 IDE tools)
+  (baseline with 9 IDE tools), `results/baseline-terse-deepseek/`
+  (DeepSeek baseline with terse tool descriptions)
 - Each run dir: `results.json`, `report.json`, `edit_attribution.jsonl`,
   `refactoring_log.jsonl` (guardrail), `run.log`
 - An earlier `smoke-guardrail/` run validated the pipeline but is superseded
