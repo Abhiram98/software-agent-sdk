@@ -27,8 +27,12 @@ Prerequisites:
 
 Usage:
     uv run python refactoring_evals/extract_method/run_eval.py \
-        [--project OpenRefine] [--tasks 0 2] [--mode both] [--max-iterations 100]
-"""
+        [--project OpenRefine] [--tasks 0 2] [--mode both] [--max-iterations 100] \\
+        [--mcp-verbosity terse]
+MCP Verbosity:
+    The --mcp-verbosity flag controls tool description verbosity for the IDE
+    MCP server. Options: 'terse', 'medium', 'verbose'. If unset, the control
+    file (~/.mcp-description-variant.txt) is deleted to use the IDE's default."""
 
 import argparse
 import json
@@ -80,6 +84,9 @@ MODE_NUDGE = {"baseline": "0", "guardrail": "1"}
 
 EXTRACT_METHOD_TYPE = "Extract Method"
 
+MCP_VERBOSITY_FILE = Path.home() / ".mcp-description-variant.txt"
+MCP_VERBOSITY_LEVELS = ("terse", "medium", "verbose")
+
 
 def run_git(repo: Path, *args: str) -> str:
     result = subprocess.run(
@@ -94,6 +101,22 @@ def run_git(repo: Path, *args: str) -> str:
 
 def is_dirty(repo: Path) -> bool:
     return bool(run_git(repo, "status", "--porcelain"))
+
+
+def set_mcp_verbosity(level: str | None) -> None:
+    """Set MCP tool description verbosity level.
+
+    Args:
+        level: One of 'terse', 'medium', 'verbose', or None to use default.
+            If None, deletes the control file to use the IDE's default.
+    """
+    if level is None:
+        if MCP_VERBOSITY_FILE.exists():
+            MCP_VERBOSITY_FILE.unlink()
+            logger.info("Removed MCP verbosity control file (using IDE default)")
+    else:
+        MCP_VERBOSITY_FILE.write_text(level)
+        logger.info("Set MCP verbosity to '%s'", level)
 
 
 def prepare_repo(repo: Path) -> str:
@@ -424,7 +447,18 @@ def main() -> None:
     parser.add_argument("--mode", choices=[*MODE_NUDGE, "both"], default="both")
     parser.add_argument("--max-iterations", type=int, default=100)
     parser.add_argument("--run-id", default=datetime.now(UTC).strftime("%Y%m%d-%H%M%S"))
+    parser.add_argument(
+        "--mcp-verbosity",
+        choices=MCP_VERBOSITY_LEVELS,
+        help=(
+            "MCP tool description verbosity level: 'terse', 'medium', or 'verbose'. "
+            "If unset, deletes the control file to use the IDE's default."
+        ),
+    )
     args = parser.parse_args()
+
+    # Set MCP verbosity before any IDE interaction
+    set_mcp_verbosity(args.mcp_verbosity)
 
     tasks_by_project: dict[str, list[str]] = json.loads(TASKS_PATH.read_text())
     projects = [args.project] if args.project else list(tasks_by_project)
