@@ -3,6 +3,7 @@ import atexit
 import contextlib
 import copy
 import json
+import os
 import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePath
@@ -19,10 +20,13 @@ from openhands.sdk.conversation.cancellation import CancellationToken
 from openhands.sdk.conversation.edit_attribution import run_with_edit_tracking
 from openhands.sdk.conversation.event_store import EventLog
 from openhands.sdk.conversation.exceptions import ConversationRunError
+from openhands.sdk.conversation.refactoring_dedup import dedup_key
 from openhands.sdk.conversation.refactoring_miner import (
+    _run_git,
     direct_edit_paths,
     extract_method_detected,
     extracted_method_names,
+    get_miner_path,
     is_refactoring_nudge_enabled,
     mine_step_refactorings,
     refactoring_file_paths,
@@ -323,6 +327,9 @@ class LocalConversation(BaseConversation):
         self._step_holds_state_lock = False
         self._step_count = 0
         self._refactoring_parent_commit: str | None = None
+        # Sliding window refactoring detection state
+        self._refactoring_nudge_keys: set[str] = set()  # Dedup by description
+        self._refactoring_snapshot_shas: list[str] = []  # Last N snapshots for window
 
         # Store plugin specs for lazy loading (no IO in constructor)
         # Plugins will be loaded on first run() or send_message() call
@@ -816,6 +823,178 @@ class LocalConversation(BaseConversation):
                 ),
             )
         )
+
+    # Sliding window size for multi-step refactoring detection.
+    # A window of 3 captures typical delete→paste→update patterns.
+    _REFACTORING_WINDOW_SIZE: Final[int] = 3
+
+    def _maybe_nudge_sliding_window_refactorings(self) -> None:
+        """Nudge when a multi-step refactoring is detected via sliding window.
+
+        Runs RefactoringMiner on the combined diff of the last N snapshots,
+        deduplicates against past nudges, and emits a nudge for newly detected
+        refactorings. This catches multi-step refactorings (Move Method, Pull
+        Up, Push Down) that span multiple agent steps.
+
+        The nudge fires on first detection, not when "complete" — earlier
+        intervention is cheaper to fix.
+        """
+        if not is_refactoring_nudge_enabled():
+            return
+
+        # Need at least 2 snapshots to form a window
+        if len(self._refactoring_snapshot_shas) < 2:
+            return
+
+        # Get the combined diff for the window
+        window_shas = self._refactoring_snapshot_shas[-self._REFACTORING_WINDOW_SIZE :]
+        if not window_shas:
+            return
+
+        # To detect multi-step refactorings, we need to compare the first
+        # snapshot in the window to the last. RefactoringMiner expects a
+        # single commit to analyze, so we create a temporary commit whose
+        # tree is the last snapshot's tree and whose parent is the first
+        # snapshot (the window baseline).
+        first_sha = window_shas[0]
+        last_sha = window_shas[-1]
+
+        # Need a git repo
+        try:
+            repo = _run_git(
+                str(self.workspace.working_dir), "rev-parse", "--show-toplevel"
+            )
+        except Exception:
+            return
+
+        # Need RefactoringMiner available
+        miner = get_miner_path()
+        if miner is None:
+            return
+
+        # Run RefactoringMiner on the combined diff
+        try:
+            # Create a temporary commit that spans the window:
+            # - Tree is the last snapshot's tree
+            # - Parent is the first snapshot (window baseline)
+            # This way RefactoringMiner sees the combined diff.
+            import subprocess
+
+            # Get the tree from the last snapshot
+            tree_sha = subprocess.run(
+                ["git", "rev-parse", f"{last_sha}^{{tree}}"],
+                cwd=repo,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if tree_sha.returncode != 0:
+                return
+            tree = tree_sha.stdout.strip()
+
+            # Create a temporary commit: tree from last_sha, parent from first_sha
+            window_commit = subprocess.run(
+                ["git", "commit-tree", tree, "-p", first_sha, "-m", "window snapshot"],
+                cwd=repo,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env={
+                    **os.environ,
+                    "GIT_AUTHOR_NAME": "openhands",
+                    "GIT_AUTHOR_EMAIL": "openhands@all-hands.dev",
+                    "GIT_COMMITTER_NAME": "openhands",
+                    "GIT_COMMITTER_EMAIL": "openhands@all-hands.dev",
+                },
+            )
+            if window_commit.returncode != 0:
+                return
+            commit_sha = window_commit.stdout.strip()
+
+            # Run RefactoringMiner on the window commit
+            import tempfile
+
+            fd, out_file = tempfile.mkstemp(
+                prefix="openhands-refminer-window-", suffix=".json"
+            )
+            os.close(fd)
+            try:
+                result = subprocess.run(
+                    [miner, "-c", repo, commit_sha, "-json", out_file],
+                    cwd=repo,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                if result.returncode != 0 or not Path(out_file).exists():
+                    return
+
+                with open(out_file, encoding="utf-8") as f:
+                    payload = json.load(f)
+
+                refactorings: list[dict[str, Any]] = []
+                for entry in payload.get("commits", []):
+                    refactorings.extend(entry.get("refactorings", []))
+            finally:
+                os.unlink(out_file)
+
+            # Check for new refactorings (not already nudged)
+            new_keys: list[str] = []
+            for r in refactorings:
+                key = dedup_key(r)
+                if key and key not in self._refactoring_nudge_keys:
+                    new_keys.append(key)
+
+            if not new_keys:
+                return
+
+            # Check if direct edits touched the refactoring's files
+            root = str(self.workspace.working_dir)
+            refactoring_paths = refactoring_file_paths(refactorings, root)
+
+            # Get recent events for edit path check
+            # Use events from the window span
+            recent_events = list(self._state.events)
+            if not direct_edit_paths(recent_events, root) & refactoring_paths:
+                return
+
+            # Emit nudge for new refactorings
+            for key in new_keys:
+                self._refactoring_nudge_keys.add(key)
+
+            # Find the refactoring type for the nudge message
+            r_type = None
+            for r in refactorings:
+                if dedup_key(r) in new_keys:
+                    r_type = r.get("type", "refactoring")
+                    break
+
+            if r_type:
+                self._on_event(
+                    MessageEvent(
+                        source="environment",
+                        llm_message=Message(
+                            role="user",
+                            content=[
+                                TextContent(
+                                    text=(
+                                        f"Refactoring analysis detected a "
+                                        f"'{r_type}' refactoring applied through "
+                                        "direct text edits. Please revert that "
+                                        "edit and use the appropriate refactoring "
+                                        "tool from the IntelliJ IDEA MCP server "
+                                        "instead. For future refactorings of this "
+                                        "type, use the refactoring tool so the IDE "
+                                        "applies the change structurally and keeps "
+                                        "references consistent."
+                                    )
+                                )
+                            ],
+                        ),
+                    )
+                )
+        except Exception as e:
+            logger.debug("Sliding window refactoring detection failed: %s", e)
 
     def _check_stuck_or_nudge(self) -> bool:
         """Nudge once on a repeating action-error streak, else apply is_stuck()."""
@@ -2086,10 +2265,27 @@ class LocalConversation(BaseConversation):
                     ) = mine_step_refactorings(
                         self, self._step_count, self._refactoring_parent_commit
                     )
+                    # Track snapshot for sliding window detection
+                    if self._refactoring_parent_commit:
+                        self._refactoring_snapshot_shas.append(
+                            self._refactoring_parent_commit
+                        )
+                        # Keep only the last N snapshots
+                        if (
+                            len(self._refactoring_snapshot_shas)
+                            > self._REFACTORING_WINDOW_SIZE * 2
+                        ):
+                            self._refactoring_snapshot_shas = (
+                                self._refactoring_snapshot_shas[
+                                    -self._REFACTORING_WINDOW_SIZE * 2 :
+                                ]
+                            )
                     self._maybe_nudge_extract_method(
                         step_refactorings,
                         self._state.events[step_start_event_count:],
                     )
+                    # Check for multi-step refactorings via sliding window
+                    self._maybe_nudge_sliding_window_refactorings()
 
                     # Check for non-finished terminal conditions
                     # Note: We intentionally do NOT check for FINISHED status here.
@@ -2361,9 +2557,28 @@ class LocalConversation(BaseConversation):
                             self._step_count,
                             self._refactoring_parent_commit,
                         )
+                        # Track snapshot for sliding window detection
+                        if self._refactoring_parent_commit:
+                            self._refactoring_snapshot_shas.append(
+                                self._refactoring_parent_commit
+                            )
+                            # Keep only the last N snapshots
+                            if (
+                                len(self._refactoring_snapshot_shas)
+                                > self._REFACTORING_WINDOW_SIZE * 2
+                            ):
+                                self._refactoring_snapshot_shas = (
+                                    self._refactoring_snapshot_shas[
+                                        -self._REFACTORING_WINDOW_SIZE * 2 :
+                                    ]
+                                )
                         self._maybe_nudge_extract_method(
                             step_refactorings,
                             self._state.events[step_start_event_count:],
+                        )
+                        # Check for multi-step refactorings via sliding window
+                        await asyncio.to_thread(
+                            self._maybe_nudge_sliding_window_refactorings
                         )
 
                         # astep releases the state lock for the LLM call, so a
