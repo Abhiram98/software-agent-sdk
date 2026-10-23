@@ -2,9 +2,19 @@
 
 Every tool call is checked for file edits: after the tool runs, the git
 working tree is snapshotted as a dangling commit, parented on the previous
-snapshot and authored according to the tool's category. Every changed line
-is credited to the tool that last wrote it (git blame semantics): when a
-tool deletes lines, the deletions count against that tool.
+snapshot and authored according to the tool's category.
+
+Each line has a label: ``base`` for code the session never touched,
+otherwise a tool category. Labels are updated per tool call by running
+``git blame -M -C`` on that call's snapshot alone. A line keeps the label of
+the line it came from; if the call wrote or moved the line, the call's
+category is added and the least-trusted label wins (``direct_edit`` over
+``refactoring_tool`` over ``base``). So code the LLM edited or moved stays
+``direct_edit`` even after a refactoring tool moves it again, while base
+code moved only by a refactoring tool is ``refactoring_tool``. Git only
+recognizes a moved line when its text is unchanged and long enough, so code
+a tool re-indents counts as newly written by that tool. When a tool deletes
+lines, the deletions count against that tool.
 
 Tools fall into two categories:
 
@@ -97,18 +107,17 @@ DEFAULT_REFACTORING_TOOL_NAMES = frozenset(
     }
 )
 
-# Snapshot commits are authored by category so `git blame` attributes each
-# line. Committer identity is deterministic so git never fails on repos or
-# hosts without a configured identity.
+# Snapshot commits are authored by category so the chain reads naturally in
+# `git log`. Committer identity is deterministic so git never fails on repos
+# or hosts without a configured identity.
 _BASE_AUTHOR = "openhands-edit-base"
 _CATEGORY_AUTHORS = {
     REFACTORING_TOOL: "openhands-refactoring-tool",
     DIRECT_EDIT: "openhands-direct-edit",
 }
-_AUTHOR_CATEGORIES = {
-    _BASE_AUTHOR: BASELINE,
-    **{author: category for category, author in _CATEGORY_AUTHORS.items()},
-}
+# Least trusted last: when labels combine, the later one wins.
+_TRUST_ORDER = (BASELINE, REFACTORING_TOOL, DIRECT_EDIT)
+_BLAME_HEADER_RE = re.compile(r"^([0-9a-f]{40,64}) (\d+) \d+")
 _GIT_IDENTITY = {
     "GIT_AUTHOR_NAME": "openhands",
     "GIT_AUTHOR_EMAIL": "openhands@all-hands.dev",
@@ -235,20 +244,73 @@ def _changed_files(repo: str, parent: str, child: str) -> list[tuple[str, int, i
     return files
 
 
-def _blame_categories(repo: str, commit: str, relpath: str) -> list[str] | None:
-    """Per-line attribution of a file at ``commit``, or None if unavailable."""
-    try:
-        out = _run_git(repo, "blame", "--line-porcelain", commit, "--", relpath)
-    except RuntimeError:
-        return None
-    categories: list[str] = []
-    author: str | None = None
+def _least_trusted(*labels: str) -> str:
+    return max(labels, key=_TRUST_ORDER.index)
+
+
+def _blame_step(
+    repo: str, parent: str, commit: str, relpath: str, *move_args: str
+) -> list[tuple[str, int, str]]:
+    """Blame ``relpath`` at ``commit`` with history cut at ``parent``.
+
+    Returns one (commit sha, line number, path) origin per line: ``commit``
+    for lines the step wrote, otherwise where the line sits in ``parent``.
+    """
+    out = _run_git(
+        repo,
+        "blame",
+        "--line-porcelain",
+        *move_args,
+        commit,
+        f"^{parent}",
+        "--",
+        relpath,
+    )
+    origins: list[tuple[str, int, str]] = []
+    sha, line_no, path = "", 0, relpath
     for line in out.splitlines():
         if line.startswith("\t"):
-            categories.append(_AUTHOR_CATEGORIES.get(author or "", BASELINE))
-        elif line.startswith("author "):
-            author = line[len("author ") :]
-    return categories
+            origins.append((sha, line_no, path))
+        elif line.startswith("filename "):
+            path = line[len("filename ") :]
+        elif m := _BLAME_HEADER_RE.match(line):
+            sha, line_no = m.group(1), int(m.group(2))
+    return origins
+
+
+def _step_labels(
+    repo: str,
+    parent: str,
+    commit: str,
+    relpath: str,
+    category: str,
+    labels: dict[str, list[str]],
+) -> list[str] | None:
+    """Labels of ``relpath`` after one tool call, or None if unavailable.
+
+    ``labels`` holds the labels before the call; files missing from it are
+    all ``base``. Plain blame tells which lines the call touched; ``-M -C``
+    blame tells which of those it only moved or copied, and from where.
+    """
+    try:
+        touched = _blame_step(repo, parent, commit, relpath)
+        moved = _blame_step(repo, parent, commit, relpath, "-M", "-C")
+    except RuntimeError:
+        return None
+
+    def previous(path: str, line_no: int) -> str:
+        old = labels.get(path, [])
+        return old[line_no - 1] if 0 < line_no <= len(old) else BASELINE
+
+    result: list[str] = []
+    for (t_sha, t_line, t_path), (m_sha, m_line, m_path) in zip(touched, moved):
+        if t_sha != commit:
+            result.append(previous(t_path, t_line))
+        elif m_sha == commit:
+            result.append(category)
+        else:
+            result.append(_least_trusted(previous(m_path, m_line), category))
+    return result
 
 
 def _exclude_relpath(repo: str) -> str | None:
@@ -500,8 +562,8 @@ def net_line_attribution(
 class EditLedger:
     """Credits each changed line to the tool call that wrote it.
 
-    The ledger is a chain of dangling git snapshot commits; per-line
-    attribution is read back with ``git blame``.
+    The ledger is a chain of dangling git snapshot commits; per-line labels
+    are carried from one snapshot to the next with ``git blame``.
     """
 
     def __init__(self, root: str, session_id: str):
@@ -516,8 +578,8 @@ class EditLedger:
         self._unusable = False
         self._repo: str | None = None
         self._parent: str | None = None  # latest snapshot sha
-        # Repo-relative paths edited by tools, with their cached line counts.
-        self._final_cache: dict[str, Counter[str]] = {}
+        # Per-line labels of the files changed by tools, keyed by repo path.
+        self._labels: dict[str, list[str]] = {}
 
     @contextmanager
     def track_edits(self, tool_name: str) -> Generator[None]:
@@ -549,7 +611,13 @@ class EditLedger:
         relpath = os.path.relpath(os.path.realpath(path), self._repo)
         if relpath.startswith(".."):
             return []
-        return _blame_categories(self._repo, self._parent, relpath) or []
+        if relpath in self._labels:
+            return list(self._labels[relpath])
+        try:
+            content = _run_git(self._repo, "show", f"{self._parent}:{relpath}")
+        except RuntimeError:
+            return []
+        return [BASELINE] * len(content.splitlines())
 
     def _seed(self) -> None:
         self._seeded = True
@@ -584,27 +652,33 @@ class EditLedger:
                 return  # nothing changed
             self.seq += 1
             files: list[dict[str, object]] = []
+            new_labels: dict[str, list[str]] = {}
             for relpath, insertions, deletions in _changed_files(repo, previous, sha):
-                categories = _blame_categories(repo, sha, relpath) or []
-                attributed = {
-                    str(i + 1): cat
-                    for i, cat in enumerate(categories)
-                    if cat != BASELINE
-                }
+                labels = _step_labels(
+                    repo, previous, sha, relpath, category, self._labels
+                )
+                new_labels[relpath] = labels or []
                 files.append(
                     {
                         "path": relpath,
                         "insertions": insertions,
                         "deletions": deletions,
-                        "attributed_lines": attributed,
+                        "attributed_lines": {
+                            str(i + 1): label
+                            for i, label in enumerate(labels or [])
+                            if label != BASELINE
+                        },
                     }
                 )
                 self.written_lines[category] += insertions + deletions
-                self._final_cache[relpath] = Counter(attributed.values())
+            self._labels.update(new_labels)
             self._parent = sha
-            self.final_lines = Counter()
-            for counts in self._final_cache.values():
-                self.final_lines.update(counts)
+            self.final_lines = Counter(
+                label
+                for labels in self._labels.values()
+                for label in labels
+                if label != BASELINE
+            )
             record = {
                 "timestamp": datetime.now(UTC).isoformat(),
                 "session_id": self.session_id,

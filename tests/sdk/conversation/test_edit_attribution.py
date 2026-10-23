@@ -345,6 +345,78 @@ def test_net_line_attribution_reconciles_and_splits(workspace):
     assert sum(v["deleted"] for v in result.values()) == 0
 
 
+GUARDED_FILE = """\
+class Calculator {
+    int process(List<Integer> items) {
+        if (items.size() > 100) {
+            throw new IllegalArgumentException("too many items");
+        }
+        int total = 0;
+        for (int it : items) {
+            total += it;
+        }
+        log.info("total=" + total);
+        return total;
+    }
+}
+"""
+
+GUARD_EDITED_FILE = GUARDED_FILE.replace("items.size() > 100", "items.size() >= 100")
+
+GUARD_EXTRACTED_FILE = """\
+class Calculator {
+    int process(List<Integer> items) {
+        validate(items);
+        int total = 0;
+        for (int it : items) {
+            total += it;
+        }
+        log.info("total=" + total);
+        return total;
+    }
+
+    private void validate(List<Integer> items) {
+        if (items.size() >= 100) {
+            throw new IllegalArgumentException("too many items");
+        }
+    }
+}
+"""
+
+EDITED_GUARD_LINE = "        if (items.size() >= 100) {"
+
+
+def test_direct_edit_relocated_by_refactoring_tool_stays_direct_edit(workspace):
+    """A direct edit (here an off-by-one behavior change) made inside a region
+    that is later extracted keeps its direct-edit label, while untouched base
+    lines moved by the tool are credited to the tool."""
+    target = workspace / "Calculator.java"
+    target.write_text(GUARDED_FILE)
+    base_sha = _commit_all(workspace, "base")
+    ledger = EditLedger(str(workspace), "test-session")
+
+    with ledger.track_edits("file_editor"):
+        target.write_text(GUARD_EDITED_FILE)
+    with ledger.track_edits("extract_method"):
+        target.write_text(GUARD_EXTRACTED_FILE)
+
+    lines = GUARD_EXTRACTED_FILE.splitlines()
+    labels = dict(zip(lines, ledger.line_categories(str(target))))
+    assert labels[EDITED_GUARD_LINE] == DIRECT_EDIT
+    assert labels["    private void validate(List<Integer> items) {"] == (
+        REFACTORING_TOOL
+    )
+    assert labels[
+        '            throw new IllegalArgumentException("too many items");'
+    ] == (REFACTORING_TOOL)
+
+    commit_sha = _commit_all(workspace, "agent")
+    records = [json.loads(r) for r in get_edit_log_path().read_text().splitlines()]
+    result = net_line_attribution(str(workspace), records, base_sha, commit_sha)
+    assert result[DIRECT_EDIT]["inserted"] == 1
+    assert result[REFACTORING_TOOL]["inserted"] == 6
+
+
 def test_net_line_attribution_revert_roundtrip_is_net_zero(workspace):
     """A delete-then-restore roundtrip leaves no net attributed lines."""
     base_sha = _commit_all(workspace, "base")
