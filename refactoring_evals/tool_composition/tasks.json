@@ -1,0 +1,221 @@
+{
+  "_schema": {
+    "id": "stable task identifier, used in result filenames",
+    "category": "row in PROPOSALS.md this task instantiates",
+    "composition_driver": "why one tool call is not enough: 'goal' when the goal itself needs several kinds of steps; 'precondition' when a tool precondition blocks the obvious single call and the agent must discover what to do",
+    "prompt": "task text given to the agent; states the goal only, and does not mention any tool or the intermediate steps",
+    "known_solutions": "tool sequences known to complete the task with the IntelliJ MCP tools in intellij-refactoring-fork; order matters. Not exhaustive: any path that reaches expected_end_state counts",
+    "why_not_one_call": "what makes the obvious single tool call fail or fall short",
+    "expected_end_state": "observable properties of the finished code that grading checks, independent of the path taken; checked against base_sha in manifest.json",
+    "verified": "whether a known solution has been executed against the base commit",
+    "checks": "machine checks for expected_end_state, run by run_eval.py on the final tree: 'present'/'absent' are Python regexes searched in the file at 'path'; 'unchanged' means the file is identical to base_sha. Compilation is checked separately with --build"
+  },
+  "OpenRefine": [
+    {
+      "id": "move-with-helper-01-getcolumnsinfo-write",
+      "category": "Move method that uses private members of the source",
+      "composition_driver": "precondition",
+      "prompt": "GetColumnsInfoCommand (main/src/com/google/refine/commands/column/GetColumnsInfoCommand.java) computes and serializes the numeric information of each column itself. Make com.google.refine.model.Column responsible for this instead: doGet should call a method on Column for each column, and GetColumnsInfoCommand should no longer contain any bin-index logic.",
+      "known_solutions": [
+        [
+          "move_method GetColumnsInfoCommand.getBinIndex(Project, Column) -> com.google.refine.model.Column",
+          "move_method GetColumnsInfoCommand.write(Project, Column, JsonGenerator) -> com.google.refine.model.Column"
+        ],
+        [
+          "inline_method GetColumnsInfoCommand.getBinIndex deleteMethod=true",
+          "move_method GetColumnsInfoCommand.write(Project, Column, JsonGenerator) -> com.google.refine.model.Column"
+        ]
+      ],
+      "why_not_one_call": "write calls the private helper getBinIndex. Moving write alone would make it reference a private member of GetColumnsInfoCommand, and move_method cannot widen that member's access, so the move is rejected with a conflict.",
+      "expected_end_state": [
+        "Column declares an instance method that writes the column info given a Project and a JsonGenerator",
+        "GetColumnsInfoCommand declares no method other than doGet, and does not reference NumericBinIndex",
+        "GetColumnsInfoCommand.doGet calls that Column method for each column",
+        "the project compiles"
+      ],
+      "checks": [
+        {
+          "path": "main/src/com/google/refine/model/Column.java",
+          "present": "void\\s+\\w+\\(\\s*Project\\s+\\w+,\\s*JsonGenerator\\s+\\w+\\s*\\)"
+        },
+        {
+          "path": "main/src/com/google/refine/commands/column/GetColumnsInfoCommand.java",
+          "absent": "\\bNumericBinIndex\\b"
+        },
+        {
+          "path": "main/src/com/google/refine/commands/column/GetColumnsInfoCommand.java",
+          "present": "column\\.\\w+\\(\\s*project\\s*,\\s*writer\\s*\\)"
+        }
+      ],
+      "verified": false
+    },
+    {
+      "id": "move-static-cluster-01-excel-isdatetimeformat",
+      "category": "Move a cluster of mutually calling methods",
+      "composition_driver": "precondition",
+      "prompt": "Other importers need the datetime-format check in main/src/com/google/refine/importers/ExcelImporter.java. Make isDatetimeFormat(ExcelNumberFormat) available from com.google.refine.importers.ImporterUtilities, have ExcelImporter use it from there, and leave no copy of it in ExcelImporter.",
+      "known_solutions": [
+        [
+          "move_method ExcelImporter.isInternalDatetimeFormat(int) -> com.google.refine.importers.ImporterUtilities",
+          "move_method ExcelImporter.isDatetimeFormat(ExcelNumberFormat) -> com.google.refine.importers.ImporterUtilities"
+        ]
+      ],
+      "why_not_one_call": "isDatetimeFormat calls the private static isInternalDatetimeFormat. Moving isDatetimeFormat alone leaves that call pointing at an inaccessible private member. Inlining the helper instead is likely to fail because its body is a switch with several returns.",
+      "expected_end_state": [
+        "ImporterUtilities declares a non-private static isDatetimeFormat(ExcelNumberFormat)",
+        "ExcelImporter declares neither isDatetimeFormat nor isInternalDatetimeFormat",
+        "ExcelImporter.extractCell calls ImporterUtilities.isDatetimeFormat",
+        "the project compiles"
+      ],
+      "checks": [
+        {
+          "path": "main/src/com/google/refine/importers/ImporterUtilities.java",
+          "present": "static\\s+boolean\\s+isDatetimeFormat\\(\\s*ExcelNumberFormat"
+        },
+        {
+          "path": "main/src/com/google/refine/importers/ImporterUtilities.java",
+          "absent": "private\\s+static\\s+boolean\\s+isDatetimeFormat"
+        },
+        {
+          "path": "main/src/com/google/refine/importers/ExcelImporter.java",
+          "absent": "boolean\\s+isDatetimeFormat\\("
+        },
+        {
+          "path": "main/src/com/google/refine/importers/ExcelImporter.java",
+          "absent": "boolean\\s+isInternalDatetimeFormat\\("
+        },
+        {
+          "path": "main/src/com/google/refine/importers/ExcelImporter.java",
+          "present": "ImporterUtilities\\.isDatetimeFormat\\("
+        }
+      ],
+      "verified": false
+    },
+    {
+      "id": "move-static-with-field-01-fingerprint-stripnondiacritics",
+      "category": "Move method that writes coupled fields (static variant)",
+      "composition_driver": "precondition",
+      "prompt": "Make the non-diacritic transliteration in main/src/com/google/refine/clustering/binning/FingerprintKeyer.java (the stripNonDiacritics method) a general string utility in com.google.refine.util.StringUtils. FingerprintKeyer should keep its current behavior and should not keep its own copy.",
+      "known_solutions": [
+        [
+          "move_static_field FingerprintKeyer.NONDIACRITICS -> com.google.refine.util.StringUtils",
+          "move_method FingerprintKeyer.stripNonDiacritics(String) -> com.google.refine.util.StringUtils"
+        ]
+      ],
+      "why_not_one_call": "stripNonDiacritics reads the private static field NONDIACRITICS, which nothing else uses. Moving the method alone leaves it referencing an inaccessible private field, so the move is rejected.",
+      "expected_end_state": [
+        "StringUtils declares a non-private static stripNonDiacritics(String)",
+        "FingerprintKeyer declares neither stripNonDiacritics nor NONDIACRITICS",
+        "FingerprintKeyer.normalize(String, boolean) calls StringUtils.stripNonDiacritics",
+        "the project compiles and KeyerTests passes"
+      ],
+      "checks": [
+        {
+          "path": "main/src/com/google/refine/util/StringUtils.java",
+          "present": "static\\s+String\\s+stripNonDiacritics\\(\\s*String"
+        },
+        {
+          "path": "main/src/com/google/refine/util/StringUtils.java",
+          "absent": "private\\s+static\\s+String\\s+stripNonDiacritics"
+        },
+        {
+          "path": "main/src/com/google/refine/clustering/binning/FingerprintKeyer.java",
+          "absent": "String\\s+stripNonDiacritics\\(\\s*String"
+        },
+        {
+          "path": "main/src/com/google/refine/clustering/binning/FingerprintKeyer.java",
+          "absent": "NONDIACRITICS\\s*="
+        },
+        {
+          "path": "main/src/com/google/refine/clustering/binning/FingerprintKeyer.java",
+          "present": "StringUtils\\.stripNonDiacritics\\("
+        }
+      ],
+      "verified": false
+    },
+    {
+      "id": "extract-move-01-columnsinfo-numericstats",
+      "category": "Feature envy (Extract Method, Move Method)",
+      "composition_driver": "goal",
+      "prompt": "In main/src/com/google/refine/commands/column/GetColumnsInfoCommand.java, the method write(Project, Column, JsonGenerator) writes the statistics of a NumericBinIndex field by field (lines 105-115, from `boolean is_numeric = ...` through the end of the `if (is_numeric) { ... }` block). Move that code into a new instance method writeNumericStats(JsonGenerator writer) on com.google.refine.browsing.util.NumericBinIndex, and have write call it.",
+      "known_solutions": [
+        [
+          "extract_method GetColumnsInfoCommand.java lines 105-115, methodName=writeNumericStats",
+          "move_method GetColumnsInfoCommand.writeNumericStats(NumericBinIndex, JsonGenerator) -> com.google.refine.browsing.util.NumericBinIndex"
+        ]
+      ],
+      "why_not_one_call": "The code is a fragment, not a method, so it must be extracted before it can be moved. extract_method can only place the new method in an enclosing class, not in NumericBinIndex.",
+      "expected_end_state": [
+        "NumericBinIndex declares an instance method writeNumericStats(JsonGenerator)",
+        "GetColumnsInfoCommand.write calls columnIndex.writeNumericStats(writer) and no longer calls the NumericBinIndex getters directly",
+        "the JSON written by GetColumnsInfoCommand is unchanged",
+        "the project compiles"
+      ],
+      "checks": [
+        {
+          "path": "main/src/com/google/refine/browsing/util/NumericBinIndex.java",
+          "present": "void\\s+writeNumericStats\\(\\s*JsonGenerator\\s+\\w+\\s*\\)"
+        },
+        {
+          "path": "main/src/com/google/refine/browsing/util/NumericBinIndex.java",
+          "absent": "static\\s+void\\s+writeNumericStats"
+        },
+        {
+          "path": "main/src/com/google/refine/commands/column/GetColumnsInfoCommand.java",
+          "present": "columnIndex\\.writeNumericStats\\(\\s*writer\\s*\\)"
+        },
+        {
+          "path": "main/src/com/google/refine/commands/column/GetColumnsInfoCommand.java",
+          "absent": "columnIndex\\.getMin\\(\\)"
+        }
+      ],
+      "verified": false
+    },
+    {
+      "id": "extract-pullup-01-blankdown-enginemode",
+      "category": "Extract Method, then Pull Up",
+      "composition_driver": "goal",
+      "prompt": "In main/src/com/google/refine/operations/cell/BlankDownOperation.java, createRowVisitor computes the engine mode inline with `createEngine(project).getMode()` (line 77). Turn that expression into a reusable method getEngineMode(Project project) declared in com.google.refine.operations.EngineDependentOperation, which is where createEngine lives, and use it in BlankDownOperation. Leave other operations unchanged.",
+      "known_solutions": [
+        [
+          "extract_method BlankDownOperation.java line 77, columns 27-57, methodName=getEngineMode",
+          "pull_up_method BlankDownOperation.getEngineMode(Project) targetClass=com.google.refine.operations.EngineDependentOperation"
+        ]
+      ],
+      "why_not_one_call": "extract_method only targets enclosing classes. Pulling up then needs an explicit targetClass, because the direct superclass is EngineDependentMassCellOperation, not EngineDependentOperation.",
+      "expected_end_state": [
+        "EngineDependentOperation declares getEngineMode(Project) returning Engine.Mode, accessible from subclasses",
+        "BlankDownOperation no longer declares getEngineMode and its createRowVisitor calls getEngineMode(project)",
+        "EngineDependentMassCellOperation and FillDownOperation are unchanged",
+        "the project compiles"
+      ],
+      "checks": [
+        {
+          "path": "main/src/com/google/refine/operations/EngineDependentOperation.java",
+          "present": "Mode\\s+getEngineMode\\(\\s*Project\\s+\\w+\\s*\\)"
+        },
+        {
+          "path": "main/src/com/google/refine/operations/EngineDependentOperation.java",
+          "absent": "private\\s+[\\w.]*Mode\\s+getEngineMode"
+        },
+        {
+          "path": "main/src/com/google/refine/operations/cell/BlankDownOperation.java",
+          "absent": "Mode\\s+getEngineMode\\("
+        },
+        {
+          "path": "main/src/com/google/refine/operations/cell/BlankDownOperation.java",
+          "present": "getEngineMode\\(\\s*project\\s*\\)"
+        },
+        {
+          "path": "main/src/com/google/refine/operations/EngineDependentMassCellOperation.java",
+          "unchanged": true
+        },
+        {
+          "path": "main/src/com/google/refine/operations/cell/FillDownOperation.java",
+          "unchanged": true
+        }
+      ],
+      "verified": false
+    }
+  ]
+}
