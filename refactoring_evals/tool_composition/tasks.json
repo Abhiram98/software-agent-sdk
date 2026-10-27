@@ -137,32 +137,28 @@
       "id": "extract-move-01-columnsinfo-numericstats",
       "category": "Feature envy (Extract Method, Move Method)",
       "composition_driver": "goal",
-      "prompt": "In main/src/com/google/refine/commands/column/GetColumnsInfoCommand.java, the method write(Project, Column, JsonGenerator) writes the statistics of a NumericBinIndex field by field (lines 105-115, from `boolean is_numeric = ...` through the end of the `if (is_numeric) { ... }` block). Move that code into a new instance method writeNumericStats(JsonGenerator writer) on com.google.refine.browsing.util.NumericBinIndex, and have write call it.",
+      "prompt": "In main/src/com/google/refine/commands/column/GetColumnsInfoCommand.java, write(Project, Column, JsonGenerator) writes the statistics of a NumericBinIndex field by field (lines 105-115). Move that code into an instance method of com.google.refine.browsing.util.NumericBinIndex, and have write call it.",
       "known_solutions": [
         [
-          "extract_method GetColumnsInfoCommand.java lines 105-115, methodName=writeNumericStats",
-          "move_method GetColumnsInfoCommand.writeNumericStats(NumericBinIndex, JsonGenerator) -> com.google.refine.browsing.util.NumericBinIndex"
+          "extract_method GetColumnsInfoCommand.java lines 105-115",
+          "move_method GetColumnsInfoCommand.<extracted>(NumericBinIndex, JsonGenerator) -> com.google.refine.browsing.util.NumericBinIndex"
         ]
       ],
       "why_not_one_call": "The code is a fragment, not a method, so it must be extracted before it can be moved. extract_method can only place the new method in an enclosing class, not in NumericBinIndex.",
       "expected_end_state": [
-        "NumericBinIndex declares an instance method writeNumericStats(JsonGenerator)",
-        "GetColumnsInfoCommand.write calls columnIndex.writeNumericStats(writer) and no longer calls the NumericBinIndex getters directly",
+        "NumericBinIndex declares a new instance method that takes a JsonGenerator and writes those statistics",
+        "GetColumnsInfoCommand.write calls that method on columnIndex and no longer calls the NumericBinIndex getters directly",
         "the JSON written by GetColumnsInfoCommand is unchanged",
         "the project compiles"
       ],
       "checks": [
         {
           "path": "main/src/com/google/refine/browsing/util/NumericBinIndex.java",
-          "present": "void\\s+writeNumericStats\\(\\s*JsonGenerator\\s+\\w+\\s*\\)"
-        },
-        {
-          "path": "main/src/com/google/refine/browsing/util/NumericBinIndex.java",
-          "absent": "static\\s+void\\s+writeNumericStats"
+          "present": "(?<!static )void\\s+\\w+\\(\\s*JsonGenerator\\s+\\w+\\s*\\)"
         },
         {
           "path": "main/src/com/google/refine/commands/column/GetColumnsInfoCommand.java",
-          "present": "columnIndex\\.writeNumericStats\\(\\s*writer\\s*\\)"
+          "present": "columnIndex\\.\\w+\\(\\s*writer\\s*\\)"
         },
         {
           "path": "main/src/com/google/refine/commands/column/GetColumnsInfoCommand.java",
@@ -175,36 +171,32 @@
       "id": "extract-pullup-01-blankdown-enginemode",
       "category": "Extract Method, then Pull Up",
       "composition_driver": "goal",
-      "prompt": "In main/src/com/google/refine/operations/cell/BlankDownOperation.java, createRowVisitor computes the engine mode inline with `createEngine(project).getMode()` (line 77). Turn that expression into a reusable method getEngineMode(Project project) declared in com.google.refine.operations.EngineDependentOperation, which is where createEngine lives, and use it in BlankDownOperation. Leave other operations unchanged.",
+      "prompt": "In main/src/com/google/refine/operations/cell/BlankDownOperation.java, createRowVisitor computes the engine mode inline with `createEngine(project).getMode()` (line 77). Turn that expression into a reusable method declared in com.google.refine.operations.EngineDependentOperation, and use it in BlankDownOperation. Leave other operations unchanged.",
       "known_solutions": [
         [
-          "extract_method BlankDownOperation.java line 77, columns 27-57, methodName=getEngineMode",
-          "pull_up_method BlankDownOperation.getEngineMode(Project) targetClass=com.google.refine.operations.EngineDependentOperation"
+          "extract_method BlankDownOperation.java line 77, columns 27-57",
+          "pull_up_method BlankDownOperation.<extracted>(Project) targetClass=com.google.refine.operations.EngineDependentOperation"
         ]
       ],
       "why_not_one_call": "extract_method only targets enclosing classes. Pulling up then needs an explicit targetClass, because the direct superclass is EngineDependentMassCellOperation, not EngineDependentOperation.",
       "expected_end_state": [
-        "EngineDependentOperation declares getEngineMode(Project) returning Engine.Mode, accessible from subclasses",
-        "BlankDownOperation no longer declares getEngineMode and its createRowVisitor calls getEngineMode(project)",
+        "EngineDependentOperation declares a new non-private method taking a Project and returning Engine.Mode",
+        "BlankDownOperation declares no such method, and createRowVisitor calls the inherited one instead of createEngine(project).getMode()",
         "EngineDependentMassCellOperation and FillDownOperation are unchanged",
         "the project compiles"
       ],
       "checks": [
         {
           "path": "main/src/com/google/refine/operations/EngineDependentOperation.java",
-          "present": "Mode\\s+getEngineMode\\(\\s*Project\\s+\\w+\\s*\\)"
-        },
-        {
-          "path": "main/src/com/google/refine/operations/EngineDependentOperation.java",
-          "absent": "private\\s+[\\w.]*Mode\\s+getEngineMode"
+          "present": "(?<!private )(?<!private Engine\\.)(?:Engine\\.)?Mode\\s+\\w+\\(\\s*Project\\s+\\w+\\s*\\)"
         },
         {
           "path": "main/src/com/google/refine/operations/cell/BlankDownOperation.java",
-          "absent": "Mode\\s+getEngineMode\\("
+          "absent": "Mode\\s+\\w+\\(\\s*Project\\s+\\w+\\s*\\)"
         },
         {
           "path": "main/src/com/google/refine/operations/cell/BlankDownOperation.java",
-          "present": "getEngineMode\\(\\s*project\\s*\\)"
+          "absent": "createEngine\\(\\s*project\\s*\\)\\.getMode\\(\\)"
         },
         {
           "path": "main/src/com/google/refine/operations/EngineDependentMassCellOperation.java",
