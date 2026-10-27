@@ -137,7 +137,7 @@
       "id": "extract-move-01-columnsinfo-numericstats",
       "category": "Feature envy (Extract Method, Move Method)",
       "composition_driver": "goal",
-      "prompt": "In main/src/com/google/refine/commands/column/GetColumnsInfoCommand.java, write(Project, Column, JsonGenerator) writes the statistics of a NumericBinIndex field by field (lines 105-115). Move that code into an instance method of com.google.refine.browsing.util.NumericBinIndex, and have write call it.",
+      "prompt": "In main/src/com/google/refine/commands/column/GetColumnsInfoCommand.java, write(Project, Column, JsonGenerator) writes the statistics of a NumericBinIndex field by field (lines 105-115). Move that code to com.google.refine.browsing.util.NumericBinIndex.",
       "known_solutions": [
         [
           "extract_method GetColumnsInfoCommand.java lines 105-115",
