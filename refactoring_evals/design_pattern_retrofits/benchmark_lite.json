@@ -1,0 +1,153 @@
+{
+ "name": "design_pattern_retrofits_lite",
+ "generated": "2026-10-26",
+ "benchmark": "benchmark.json",
+ "selection": "Up to 2 tasks per pattern from distinct projects, ranked by: both states available, verification level, upstream history over synthesized reversals, then fewer red flags (target pre-existed, feature-sized commit, LLM saw no code), extra assets (alternatives, prompts), and smaller diffs. Excluded: borderline cases, ambiguous/test/archived targets, and DPD-F hits that fail the structural check or are under 30 lines. Remove-only tasks are used only for patterns with no eligible complete task.",
+ "task_count": 24,
+ "tasks": [
+  {
+   "task_id": "abstractfactory_zk_abstractuifactory",
+   "pattern": "AbstractFactory",
+   "completeness": "remove_only",
+   "verification": "tool_detected"
+  },
+  {
+   "task_id": "abstractfactory_jbehave-core_compositestepsfactory",
+   "pattern": "AbstractFactory",
+   "completeness": "remove_only",
+   "verification": "tool_detected"
+  },
+  {
+   "task_id": "adapter_ant_b0bde55",
+   "pattern": "Adapter",
+   "completeness": "complete",
+   "verification": "manual_case_study"
+  },
+  {
+   "task_id": "adapter_camel_d322aeb",
+   "pattern": "Adapter",
+   "completeness": "complete",
+   "verification": "llm_validated"
+  },
+  {
+   "task_id": "builder_hbase_07e0a30",
+   "pattern": "Builder",
+   "completeness": "complete",
+   "verification": "manual_case_study"
+  },
+  {
+   "task_id": "builder_guava_ef38625",
+   "pattern": "Builder",
+   "completeness": "complete",
+   "verification": "manual_case_study"
+  },
+  {
+   "task_id": "command_flink_13ff76d",
+   "pattern": "Command",
+   "completeness": "complete",
+   "verification": "human_validated"
+  },
+  {
+   "task_id": "composite_camel_f314d8b",
+   "pattern": "Composite",
+   "completeness": "complete",
+   "verification": "llm_validated"
+  },
+  {
+   "task_id": "decorator_ant_99deca2",
+   "pattern": "Decorator",
+   "completeness": "complete",
+   "verification": "human_validated"
+  },
+  {
+   "task_id": "decorator_flink_streamcompressiondecorator",
+   "pattern": "Decorator",
+   "completeness": "complete",
+   "verification": "manual_reversal"
+  },
+  {
+   "task_id": "facade_jbehave-core_embedder",
+   "pattern": "Facade",
+   "completeness": "remove_only",
+   "verification": "tool_detected"
+  },
+  {
+   "task_id": "factorymethod_junit4_cb6abf6",
+   "pattern": "FactoryMethod",
+   "completeness": "complete",
+   "verification": "manual_case_study"
+  },
+  {
+   "task_id": "factorymethod_hbase_c61cb7f",
+   "pattern": "FactoryMethod",
+   "completeness": "complete",
+   "verification": "llm_validated"
+  },
+  {
+   "task_id": "memento_birt_memento",
+   "pattern": "Memento",
+   "completeness": "remove_only",
+   "verification": "tool_detected"
+  },
+  {
+   "task_id": "observer_ant_a22c8c0",
+   "pattern": "Observer",
+   "completeness": "complete",
+   "verification": "human_validated"
+  },
+  {
+   "task_id": "observer_checkstyle_auditlistener",
+   "pattern": "Observer",
+   "completeness": "complete",
+   "verification": "manual_reversal"
+  },
+  {
+   "task_id": "proxy_cdt_pathentrystoreproxy",
+   "pattern": "Proxy",
+   "completeness": "remove_only",
+   "verification": "tool_detected"
+  },
+  {
+   "task_id": "proxy_playorm_iterlogproxy",
+   "pattern": "Proxy",
+   "completeness": "remove_only",
+   "verification": "tool_detected"
+  },
+  {
+   "task_id": "singleton_allbinary-platform_adminuseremaileventhandlersingletons",
+   "pattern": "Singleton",
+   "completeness": "remove_only",
+   "verification": "tool_detected"
+  },
+  {
+   "task_id": "state_hadoop_73f2092",
+   "pattern": "State",
+   "completeness": "complete",
+   "verification": "llm_validated"
+  },
+  {
+   "task_id": "strategy_activemq_7638179",
+   "pattern": "Strategy",
+   "completeness": "complete",
+   "verification": "manual_case_study"
+  },
+  {
+   "task_id": "strategy_ant_536a84c",
+   "pattern": "Strategy",
+   "completeness": "complete",
+   "verification": "manual_case_study"
+  },
+  {
+   "task_id": "visitor_cucumber-jvm_7e93851",
+   "pattern": "Visitor",
+   "completeness": "complete",
+   "verification": "human_validated"
+  },
+  {
+   "task_id": "visitor_flink_datatypeprecisionfixer",
+   "pattern": "Visitor",
+   "completeness": "complete",
+   "verification": "manual_reversal"
+  }
+ ]
+}
