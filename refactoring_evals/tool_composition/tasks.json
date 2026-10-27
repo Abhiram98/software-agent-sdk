@@ -70,11 +70,11 @@
       "checks": [
         {
           "path": "main/src/com/google/refine/importers/ImporterUtilities.java",
-          "present": "static\\s+boolean\\s+isDatetimeFormat\\(\\s*ExcelNumberFormat"
+          "present": "\\bstatic\\b[ \\t\\w.]*?\\bboolean\\s+isDatetimeFormat\\(\\s*ExcelNumberFormat"
         },
         {
           "path": "main/src/com/google/refine/importers/ImporterUtilities.java",
-          "absent": "private\\s+static\\s+boolean\\s+isDatetimeFormat"
+          "absent": "\\bprivate\\b[ \\t\\w.]*?\\bboolean\\s+isDatetimeFormat\\("
         },
         {
           "path": "main/src/com/google/refine/importers/ExcelImporter.java",
@@ -112,11 +112,11 @@
       "checks": [
         {
           "path": "main/src/com/google/refine/util/StringUtils.java",
-          "present": "static\\s+String\\s+stripNonDiacritics\\(\\s*String"
+          "present": "\\bstatic\\b[ \\t\\w.]*?\\bString\\s+stripNonDiacritics\\(\\s*String"
         },
         {
           "path": "main/src/com/google/refine/util/StringUtils.java",
-          "absent": "private\\s+static\\s+String\\s+stripNonDiacritics"
+          "absent": "\\bprivate\\b[ \\t\\w.]*?\\bString\\s+stripNonDiacritics\\("
         },
         {
           "path": "main/src/com/google/refine/clustering/binning/FingerprintKeyer.java",
@@ -154,7 +154,11 @@
       "checks": [
         {
           "path": "main/src/com/google/refine/browsing/util/NumericBinIndex.java",
-          "present": "(?<!static )void\\s+\\w+\\(\\s*JsonGenerator\\s+\\w+\\s*\\)"
+          "present": "\\bvoid\\s+\\w+\\(\\s*JsonGenerator\\s+\\w+\\s*\\)"
+        },
+        {
+          "path": "main/src/com/google/refine/browsing/util/NumericBinIndex.java",
+          "absent": "\\bstatic\\b[ \\t\\w.]*?\\bvoid\\s+\\w+\\(\\s*JsonGenerator"
         },
         {
           "path": "main/src/com/google/refine/commands/column/GetColumnsInfoCommand.java",
@@ -188,7 +192,11 @@
       "checks": [
         {
           "path": "main/src/com/google/refine/operations/EngineDependentOperation.java",
-          "present": "(?<!private )(?<!private Engine\\.)(?:Engine\\.)?Mode\\s+\\w+\\(\\s*Project\\s+\\w+\\s*\\)"
+          "present": "\\bMode\\s+\\w+\\(\\s*Project\\s+\\w+\\s*\\)"
+        },
+        {
+          "path": "main/src/com/google/refine/operations/EngineDependentOperation.java",
+          "absent": "\\bprivate\\b[ \\t\\w.]*?\\bMode\\s+\\w+\\(\\s*Project"
         },
         {
           "path": "main/src/com/google/refine/operations/cell/BlankDownOperation.java",

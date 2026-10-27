@@ -100,6 +100,10 @@ IDE_REFACTORING_TOOLS = (
     "safe_delete",
 )
 CATEGORIES = (REFACTORING_TOOL, DIRECT_EDIT, UNATTRIBUTED)
+# The IDE proxy also exposes `execute_tool`, which dispatches to any IDE tool by
+# name. Edits are attributed by the outer tool name, so refactorings run through
+# it would count as direct edits; hide it so the named tools are used instead.
+HIDDEN_TOOLS_REGEX = r"^(?!execute_tool$)"
 HINT = (
     "\n\nThe IDE refactoring tools are available; prefer them over editing "
     "code by hand where they apply."
@@ -125,13 +129,27 @@ def is_dirty(repo: Path) -> bool:
     return bool(run_git(repo, "status", "--porcelain"))
 
 
-def prepare_repo(repo: Path, base_sha: str) -> None:
-    """Put the repo on a clean throwaway branch at base_sha."""
-    if is_dirty(repo):
+def prepare_repo(repo: Path, base_sha: str) -> bool:
+    """Put the repo on a clean throwaway branch at base_sha.
+
+    Returns whether uncommitted changes had to be stashed first.
+    """
+    stashed = is_dirty(repo)
+    if stashed:
         logger.warning("%s has uncommitted changes; stashing them", repo)
         run_git(repo, "stash", "push", "-u", "-m", "tool-composition-eval stash")
     run_git(repo, "checkout", "-B", EVAL_BRANCH, base_sha)
     run_git(repo, "clean", "-fd")
+    return stashed
+
+
+def restore_repo(repo: Path, branch: str, stashed: bool) -> None:
+    """Return to the branch the run started on and re-apply stashed changes."""
+    run_git(repo, "reset", "--hard")
+    run_git(repo, "clean", "-fd")
+    run_git(repo, "checkout", branch)
+    if stashed:
+        run_git(repo, "stash", "pop")
 
 
 def commit_changes(repo: Path, message: str) -> str | None:
@@ -195,6 +213,7 @@ def build_agent(repo: Path) -> tuple[Agent, LLM]:
     agent = Agent(
         llm=llm,
         tools=[Tool(name=TerminalTool.name), Tool(name=FileEditorTool.name)],
+        filter_tools_regex=HIDDEN_TOOLS_REGEX,
         mcp_config={
             "intellij": MCPServer(
                 url=MCP_URL,
@@ -441,11 +460,21 @@ def main() -> None:
     ensure_idea_ready(repo)
 
     results: list[dict[str, Any]] = []
-    for task in tasks:
-        for repeat in range(args.repeats):
-            results.append(run_one(repo, task, base_sha, run_dir, args, repeat))
-            (run_dir / "results.json").write_text(json.dumps(results, indent=2) + "\n")
-    prepare_repo(repo, base_sha)  # leave the tree clean
+    start_branch = run_git(repo, "branch", "--show-current")
+    if not start_branch or start_branch == EVAL_BRANCH:
+        raise RuntimeError(
+            f"Start the run from a named branch other than {EVAL_BRANCH}"
+        )
+    stashed = prepare_repo(repo, base_sha)
+    try:
+        for task in tasks:
+            for repeat in range(args.repeats):
+                results.append(run_one(repo, task, base_sha, run_dir, args, repeat))
+                (run_dir / "results.json").write_text(
+                    json.dumps(results, indent=2) + "\n"
+                )
+    finally:
+        restore_repo(repo, start_branch, stashed)
 
     print(summarize(results))
     print(f"\nResults: {run_dir / 'results.json'}")
