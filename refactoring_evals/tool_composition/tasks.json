@@ -95,7 +95,7 @@
       "id": "move-static-with-field-01-fingerprint-stripnondiacritics",
       "category": "Move method that writes coupled fields (static variant)",
       "composition_driver": "precondition",
-      "prompt": "Make the non-diacritic transliteration in main/src/com/google/refine/clustering/binning/FingerprintKeyer.java (the stripNonDiacritics method) a general string utility in com.google.refine.util.StringUtils. FingerprintKeyer should keep its current behavior and should not keep its own copy.",
+      "prompt": "Move the stripNonDiacritics method from main/src/com/google/refine/clustering/binning/FingerprintKeyer.java into com.google.refine.util.StringUtils, so that other code can reuse it. FingerprintKeyer should call the StringUtils version and work exactly as before.",
       "known_solutions": [
         [
           "move_static_field FingerprintKeyer.NONDIACRITICS -> com.google.refine.util.StringUtils",
