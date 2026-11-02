@@ -1,0 +1,3 @@
+[submodule "paper/design-pattern-retrofitting"]
+	path = paper/design-pattern-retrofitting
+	url = git@github.com:Abhiram98/renoagent-paper.git
