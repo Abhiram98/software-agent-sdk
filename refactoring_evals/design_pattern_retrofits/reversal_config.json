@@ -1,0 +1,14 @@
+{
+  "projects": {
+    "zk": {
+      "env": {
+        "JAVA_OPTS": "-Djava.net.preferIPv4Stack=true"
+      },
+      "setup": "mkdir -p ../zkcml && echo \"rootProject.name = 'zkcml'\" > ../zkcml/settings.gradle && echo \"plugins { id 'java' }\" > ../zkcml/build.gradle",
+      "build": "./gradlew -q compileJava -PgradleFrontendSkip=true"
+    }
+  },
+  "oracles": {
+    "abstractfactory_zk_idomfactory": "{oracles}/zk_idom/run.sh {repo} {out}"
+  }
+}

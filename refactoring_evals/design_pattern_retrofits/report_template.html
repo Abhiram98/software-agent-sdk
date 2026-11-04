@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>$title</title>
+<style>
+body { font: 14px/1.45 -apple-system, sans-serif; margin: 2em auto; max-width: 1200px; color: #222; }
+h1 { font-size: 1.5em; }
+h2 { margin-top: 2em; border-bottom: 1px solid #ccc; }
+table { border-collapse: collapse; margin: .5em 0; }
+td, th { border: 1px solid #ddd; padding: 3px 8px; text-align: left; vertical-align: top; }
+pre { background: #f6f8fa; padding: 6px; overflow-x: auto; margin: 4px 0; white-space: pre-wrap; }
+summary { cursor: pointer; color: #345; }
+.ok { color: #137333; font-weight: 600; }
+.bad { color: #b3261e; font-weight: 600; }
+.warn { color: #a05a00; font-weight: 600; }
+.muted { color: #777; }
+.diff { font: 12px/1.35 ui-monospace, Menlo, monospace; white-space: pre; border: 1px solid #ddd; }
+.diff div { padding: 0 6px; }
+.ln { color: #999; display: inline-block; width: 4.5em; user-select: none; }
+.ctx { color: #555; }
+.hunk { background: #eef; color: #448; }
+.b-tool, .c-refactoring_tool { background: #d7ecff; }
+.b-explained { background: #e7f7e7; }
+.b-deleted-file { background: #f0f0f0; color: #777; }
+.b-residue { background: #ffe1d6; }
+.c-direct_edit { background: #fff1c9; }
+.c-unattributed { background: #eee; }
+.tag { display: inline-block; padding: 0 6px; border-radius: 8px; font-size: 12px; margin-right: 4px; }
+.task { background: #eef; }
+.ev { border-left: 4px solid #ccc; margin: 10px 0; padding: 4px 10px; }
+.ev-action { border-color: #7aa7d8; }
+.ev-nudge { border-color: #d93025; background: #fff4f2; }
+.ev-user { border-color: #555; }
+.ev-error { border-color: #b3261e; background: #fff4f2; }
+.ev-agent { border-color: #137333; }
+.refs { background: #f3eefe; padding: 4px 8px; margin: 4px 0; }
+</style>
+</head>
+<body>
+<h1>$heading</h1>
+<p class="muted">$subheading</p>
+
+<h2>Verdicts</h2>
+$verdicts
+
+<h2>Plan → execution</h2>
+<p class="muted">Tool calls are credited to the plan item that was in progress when they ran.</p>
+$plan
+
+<h2>Refactorings detected on the whole diff</h2>
+<p class="muted">RefactoringMiner on start → result. Direct edits inside these code ranges count as "explained".</p>
+$refactorings
+
+<h2>Final diff by review bucket</h2>
+<p>$legend <span class="muted">Hover a line for its tool category and the refactorings
+covering it. Files with residue are expanded.</span></p>
+$final_diff
+
+<h2>Timeline</h2>
+<p class="muted">Edit diffs are colored by tool category:
+<span class="tag c-refactoring_tool">refactoring tool</span>
+<span class="tag c-direct_edit">direct edit</span></p>
+$timeline
+</body>
+</html>

@@ -1,0 +1,12 @@
+// Init script: prints the zcommon runtime classpath after compiling it.
+allprojects {
+    if (name == 'zcommon') {
+        afterEvaluate {
+            tasks.register('printRuntimeClasspath') {
+                dependsOn 'classes'
+                def runtime = sourceSets.main.runtimeClasspath
+                doLast { println runtime.asPath }
+            }
+        }
+    }
+}
