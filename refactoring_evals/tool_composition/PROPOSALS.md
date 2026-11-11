@@ -42,15 +42,15 @@ behavior on these cases has not been checked yet.
 | 2-3 | Move method that uses private members of the source | Move the private dependencies first (move_method / move_static_field / move_instance_field), then the method. The fork's move_method cannot widen access of members the moved method uses | private members used | Yes |
 | 3 | Move method that calls `super` | Extract Method on each `super.x()` call (super delegate), Move Method | `super` calls | Yes |
 | 3 | Move part of a method (split, then move) | Extract Method to split the method, Move the part that belongs elsewhere | splits | Yes |
-| 3 | Hide Delegate | Extract Method on `a.getB().x()` replacing duplicates, Move Method into `A`, Rename | client classes | Yes |
+| 3 | Hide Delegate | Extract Method on `a.getB().x()` replacing duplicates, Move Method into `A`, Rename; Find and Replace Code Duplicates for call sites in other classes | client classes | Yes |
 | 3 | Pull Up with dependency | Encapsulate Field, Pull Up the getter as abstract, Pull Up the method | fields used | Yes |
 | 3 | Extract Superclass, decomposed | Empty Extract Superclass, Pull Up Members | — | Yes |
 | 3 | Extract Interface, decomposed | Empty Extract Interface, Pull Up Members as abstract | — | Yes |
 | 3 | Inline Super Class, decomposed | Push Down all members, Safe Delete the superclass | — | Yes; check how Safe Delete handles `extends` |
-| 3 | Replace Method with Method Object, decomposed | Extract Method on the whole body, Extract Delegate on that method | — | Partial: parameters don't become constructor fields |
+| 3 | Replace Method with Method Object, decomposed | Extract Method on the whole body, Introduce Parameter Object on the extracted method, Convert to Instance Method into the new class; optionally Introduce Field per local | locals turned into fields | Yes |
 | 3 | Command | Replace Method with Method Object, Extract Interface (`execute`), Rename | — | Yes |
-| 3-4 | Replace Constructor with Factory Method, decomposed | Extract Method on `new Foo(..)`, Make Static, Move to `Foo` | constructors | Partial: callers in other classes by hand |
-| 4 | Remove Middleman, decomposed | Inline Method on each delegating method | delegating methods | Yes |
+| 3-4 | Replace Constructor with Factory Method, decomposed | Extract Method on `new Foo(..)` (inside a static method of `Foo` if one exists; otherwise Make Static and Move to `Foo`), Find and Replace Code Duplicates for other callers, Change Visibility of the constructor | constructors | Yes |
+| 4 | Remove Middleman, decomposed | Inline Method on each delegating method | delegating methods | Yes; no good instance in OpenRefine (its forwarding methods wrap private maps or registries, so inlining them would not compile) |
 | 4 | Strategy seam (one concrete strategy) | Extract Method, Extract Delegate (method only), Extract Interface, Introduce Parameter or Field to inject it | — | Yes |
 | 4 | Data clump to a class with behavior | Introduce Parameter Object, Move Method for each method that uses it | methods moved | Yes |
 | 4+ | Move Field to an existing class | Add field, Encapsulate Field, Move the accessors | — | Partial: needs an "add field" building block plus one hand edit |

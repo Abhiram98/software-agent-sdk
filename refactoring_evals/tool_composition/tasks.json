@@ -8,6 +8,7 @@
     "why_not_one_call": "what makes the obvious single tool call fail or fall short",
     "expected_end_state": "observable properties of the finished code that grading checks, independent of the path taken; checked against base_sha in manifest.json",
     "verified": "whether a known solution has been executed against the base commit",
+    "missing_mcp_tools": "IntelliJ refactorings the known solutions need that intellij-refactoring-fork does not expose as MCP tools yet; empty or absent means the task can run today",
     "checks": "machine checks for expected_end_state, run by run_eval.py on the final tree: 'present'/'absent' are Python regexes searched in the file at 'path'; 'unchanged' means the file is identical to base_sha. Compilation is checked separately with --build"
   },
   "OpenRefine": [
@@ -214,6 +215,421 @@
           "path": "main/src/com/google/refine/operations/cell/FillDownOperation.java",
           "unchanged": true
         }
+      ],
+      "verified": false
+    },
+    {
+      "id": "move-static-cluster-02-excel-isnumberformat",
+      "category": "Move a cluster of mutually calling methods",
+      "composition_driver": "precondition",
+      "prompt": "Other importers need the number-format check in main/src/com/google/refine/importers/ExcelImporter.java. Make isNumberFormat(ExcelNumberFormat) available from com.google.refine.importers.ImporterUtilities and have ExcelImporter use it from there. ExcelImporter should keep no copy of it, and no code that only it used.",
+      "known_solutions": [
+        [
+          "move_method ExcelImporter.isInternalIntegerFormat(int) -> com.google.refine.importers.ImporterUtilities",
+          "move_method ExcelImporter.isInternalFloatFormat(int) -> com.google.refine.importers.ImporterUtilities",
+          "move_method ExcelImporter.isInternalNumberFormat(int) -> com.google.refine.importers.ImporterUtilities",
+          "move_method ExcelImporter.isNumberFormat(ExcelNumberFormat) -> com.google.refine.importers.ImporterUtilities"
+        ],
+        [
+          "inline_method ExcelImporter.isInternalNumberFormat deleteMethod=true",
+          "move_method ExcelImporter.isInternalIntegerFormat(int) -> com.google.refine.importers.ImporterUtilities",
+          "move_method ExcelImporter.isInternalFloatFormat(int) -> com.google.refine.importers.ImporterUtilities",
+          "move_method ExcelImporter.isNumberFormat(ExcelNumberFormat) -> com.google.refine.importers.ImporterUtilities"
+        ]
+      ],
+      "why_not_one_call": "isNumberFormat calls the private static isInternalNumberFormat, which calls the private static isInternalIntegerFormat and isInternalFloatFormat. move_method cannot widen access, so each method can only move after the private methods it calls have moved, starting from the leaves. The leaves are switches with several returns, so inlining them is likely to fail. NUMERIC_FORMAT is package-private and ImporterUtilities is in the same package, so it can stay.",
+      "expected_end_state": [
+        "ImporterUtilities declares a non-private static isNumberFormat(ExcelNumberFormat)",
+        "ExcelImporter declares none of isNumberFormat, isInternalNumberFormat, isInternalIntegerFormat, isInternalFloatFormat",
+        "ExcelImporter.extractCell calls ImporterUtilities.isNumberFormat",
+        "the project compiles"
+      ],
+      "checks": [
+        {
+          "path": "main/src/com/google/refine/importers/ImporterUtilities.java",
+          "present": "\\bstatic\\b[ \\t\\w.]*?\\bboolean\\s+isNumberFormat\\(\\s*ExcelNumberFormat"
+        },
+        {
+          "path": "main/src/com/google/refine/importers/ImporterUtilities.java",
+          "absent": "\\bprivate\\b[ \\t\\w.]*?\\bboolean\\s+isNumberFormat\\("
+        },
+        {
+          "path": "main/src/com/google/refine/importers/ExcelImporter.java",
+          "absent": "boolean\\s+isNumberFormat\\("
+        },
+        {
+          "path": "main/src/com/google/refine/importers/ExcelImporter.java",
+          "absent": "boolean\\s+isInternal(?:Number|Integer|Float)Format\\("
+        },
+        {
+          "path": "main/src/com/google/refine/importers/ExcelImporter.java",
+          "present": "ImporterUtilities\\.isNumberFormat\\("
+        }
+      ],
+      "verified": false
+    },
+    {
+      "id": "move-static-cluster-03-importingutilities-tryopenasarchive",
+      "category": "Move a cluster of mutually calling methods",
+      "composition_driver": "precondition",
+      "prompt": "Move tryOpenAsArchive, both overloads, from main/src/com/google/refine/importing/ImportingUtilities.java to com.google.refine.importing.ImportingManager. Callers should use the ImportingManager versions, ImportingUtilities should keep no copy of either overload, and everything else in ImportingUtilities should work as before.",
+      "known_solutions": [
+        [
+          "move_method ImportingUtilities.checkValidZip(File) -> com.google.refine.importing.ImportingManager",
+          "move_method ImportingUtilities.isFileGZipped(File) -> com.google.refine.importing.ImportingManager",
+          "move_method ImportingUtilities.tryOpenAsArchive(File, String, String) -> com.google.refine.importing.ImportingManager",
+          "move_method ImportingUtilities.tryOpenAsArchive(File, String) -> com.google.refine.importing.ImportingManager"
+        ]
+      ],
+      "why_not_one_call": "tryOpenAsArchive(File, String, String) calls two private static helpers, checkValidZip and isFileGZipped, and move_method cannot widen their access. isFileGZipped is also used by tryOpenAsCompressedFile, which stays in ImportingUtilities, so after it moves it must stay non-private. The overloads must be moved one at a time, selected by parameter types.",
+      "expected_end_state": [
+        "ImportingManager declares non-private static tryOpenAsArchive(File, String) and tryOpenAsArchive(File, String, String)",
+        "ImportingUtilities declares no tryOpenAsArchive",
+        "ImportingUtilities.postProcessRetrievedFile calls ImportingManager.tryOpenAsArchive",
+        "tryOpenAsCompressedFile still compiles and detects gzip files",
+        "the project compiles"
+      ],
+      "checks": [
+        {
+          "path": "main/src/com/google/refine/importing/ImportingManager.java",
+          "present": "\\bstatic\\b[ \\t\\w.]*?\\bInputStream\\s+tryOpenAsArchive\\(\\s*File\\s+\\w+\\s*,\\s*String\\s+\\w+\\s*\\)"
+        },
+        {
+          "path": "main/src/com/google/refine/importing/ImportingManager.java",
+          "present": "\\bstatic\\b[ \\t\\w.]*?\\bInputStream\\s+tryOpenAsArchive\\(\\s*File\\s+\\w+\\s*,\\s*String\\s+\\w+\\s*,\\s*String\\s+\\w+\\s*\\)"
+        },
+        {
+          "path": "main/src/com/google/refine/importing/ImportingManager.java",
+          "absent": "\\bprivate\\b[ \\t\\w.]*?\\bInputStream\\s+tryOpenAsArchive\\("
+        },
+        {
+          "path": "main/src/com/google/refine/importing/ImportingUtilities.java",
+          "absent": "InputStream\\s+tryOpenAsArchive\\("
+        },
+        {
+          "path": "main/src/com/google/refine/importing/ImportingUtilities.java",
+          "present": "ImportingManager\\.tryOpenAsArchive\\("
+        }
+      ],
+      "verified": false
+    },
+    {
+      "id": "extract-move-02-keyvaluecolumnize-row",
+      "category": "Feature envy (Extract Method, Move Method)",
+      "composition_driver": "goal",
+      "prompt": "In main/src/com/google/refine/operations/cell/KeyValueColumnizeOperation.java, the operation works cell by cell on the unchanged columns of a row in two places: building a grouping key from those cells, and copying those cells into a new row. This per-row work belongs in com.google.refine.model.Row. After the change, KeyValueColumnizeOperation should not access the cells of individual unchanged columns itself, and the operation should behave exactly as before.",
+      "known_solutions": [
+        [
+          "extract_method KeyValueColumnizeOperation.java lines 177-188",
+          "move_method KeyValueColumnizeOperation.<extracted>(List<Column>, Row) -> com.google.refine.model.Row targetVariableName=oldRow",
+          "move_method KeyValueColumnizeOperation.buildNewRow(List<Column>, Row, int) -> com.google.refine.model.Row targetVariableName=oldRow"
+        ]
+      ],
+      "why_not_one_call": "There are two separate pieces. The grouping key is built inline in createHistoryEntry, so it must be extracted before it can be moved. The cell copying is already a method, buildNewRow, and can be moved directly. Both moves need the Row parameter oldRow as the receiver.",
+      "expected_end_state": [
+        "Row declares an instance method taking List<Column> that returns the grouping key as a String",
+        "Row declares a method that builds a new Row from the unchanged columns, given a size",
+        "KeyValueColumnizeOperation declares no buildNewRow, has no StringBuffer, and no longer reads unchangedColumn.getCellIndex()",
+        "createHistoryEntry calls the new Row methods on oldRow",
+        "the project compiles and KeyValueColumnizeTests passes"
+      ],
+      "checks": [
+        {
+          "path": "main/src/com/google/refine/model/Row.java",
+          "present": "\\bString\\s+\\w+\\(\\s*List<Column>\\s+\\w+\\s*\\)"
+        },
+        {
+          "path": "main/src/com/google/refine/model/Row.java",
+          "present": "\\bRow\\s+\\w+\\(\\s*List<Column>\\s+\\w+\\s*,\\s*(?:Row\\s+\\w+\\s*,\\s*)?int\\s+\\w+\\s*\\)"
+        },
+        {
+          "path": "main/src/com/google/refine/operations/cell/KeyValueColumnizeOperation.java",
+          "absent": "Row\\s+buildNewRow\\("
+        },
+        {
+          "path": "main/src/com/google/refine/operations/cell/KeyValueColumnizeOperation.java",
+          "absent": "\\bStringBuffer\\b"
+        },
+        {
+          "path": "main/src/com/google/refine/operations/cell/KeyValueColumnizeOperation.java",
+          "absent": "unchangedColumn\\.getCellIndex\\(\\)"
+        },
+        {
+          "path": "main/src/com/google/refine/operations/cell/KeyValueColumnizeOperation.java",
+          "present": "oldRow\\.\\w+\\(\\s*unchangedColumns\\b"
+        }
+      ],
+      "verified": false
+    },
+    {
+      "id": "change-signature-01-importerutilities-columnmodel",
+      "category": "Change Signature, decomposed (add/remove parameter)",
+      "composition_driver": "goal",
+      "prompt": "The column helpers in main/src/com/google/refine/importers/ImporterUtilities.java take a whole Project but only ever use its column model. Change them to take a com.google.refine.model.ColumnModel instead, so that ImporterUtilities no longer depends on Project. Update all callers.",
+      "known_solutions": [
+        [
+          "introduce_parameter ImporterUtilities.setupColumns: expression project.columnModel, all occurrences",
+          "safe_delete parameter ImporterUtilities.setupColumns(Project, List<String>, ColumnModel).project",
+          "introduce_parameter ImporterUtilities.getOrAllocateColumn: expression project.columnModel, all occurrences",
+          "safe_delete parameter ImporterUtilities.getOrAllocateColumn(Project, List<String>, int, boolean, ColumnModel).project"
+        ]
+      ],
+      "why_not_one_call": "Change Signature is blocked. Replacing a parameter by one of its parts is decomposed into adding the part as a new parameter (callers then pass project.columnModel) and deleting the old parameter once it is unused. Two methods are affected, and the agent has to find both. IntelliJ's Introduce Parameter dialog can also delete parameters that become unused, which halves the call count.",
+      "expected_end_state": [
+        "setupColumns and getOrAllocateColumn each take a ColumnModel and no Project; parameter order is not graded",
+        "ImporterUtilities does not reference Project",
+        "TabularImportingParserBase and ImporterUtilitiesTests pass project.columnModel",
+        "the project compiles and ImporterUtilitiesTests passes"
+      ],
+      "checks": [
+        {
+          "path": "main/src/com/google/refine/importers/ImporterUtilities.java",
+          "absent": "\\bProject\\b"
+        },
+        {
+          "path": "main/src/com/google/refine/importers/ImporterUtilities.java",
+          "present": "\\bsetupColumns\\([^)]*\\bColumnModel\\s+\\w+"
+        },
+        {
+          "path": "main/src/com/google/refine/importers/ImporterUtilities.java",
+          "present": "\\bgetOrAllocateColumn\\([^)]*\\bColumnModel\\s+\\w+"
+        },
+        {
+          "path": "main/src/com/google/refine/importers/TabularImportingParserBase.java",
+          "present": "setupColumns\\([^;]*\\bcolumnModel\\b"
+        },
+        {
+          "path": "main/src/com/google/refine/importers/TabularImportingParserBase.java",
+          "present": "getOrAllocateColumn\\([^;]*\\bcolumnModel\\b"
+        }
+      ],
+      "missing_mcp_tools": [
+        "Introduce Parameter on an expression (the fork's introduce_parameter only accepts a local variable)",
+        "Safe Delete of a parameter (the fork's safe_delete accepts kind=parameter but is unverified on this case)"
+      ],
+      "verified": false
+    },
+    {
+      "id": "program-to-interface-01-httpclient-postnamevalue",
+      "category": "Program to an interface",
+      "composition_driver": "goal",
+      "prompt": "Several classes use com.google.refine.util.HttpClient (main/src/com/google/refine/util/HttpClient.java) only to POST a name/value pair with postNameValue. Introduce an interface for that one operation, implemented by HttpClient, and make every field, getter and local variable that is only used for postNameValue use the interface type instead of HttpClient. Code that uses other HttpClient methods should keep using HttpClient.",
+      "known_solutions": [
+        [
+          "Extract Interface HttpClient members=[postNameValue]",
+          "Use Interface Where Possible HttpClient -> <new interface>"
+        ]
+      ],
+      "why_not_one_call": "Extract Interface only creates the type; the declarations in StandardReconConfig, ReconciledDataExtensionJob and GuessTypesOfColumnCommand still name HttpClient until they are migrated. IntelliJ's Extract Interface dialog has a 'use interface where possible' option that does both in one call; block it to force the composition.",
+      "expected_end_state": [
+        "HttpClient implements a new interface that declares postNameValue(String, String, String)",
+        "StandardReconConfig.httpClient, StandardReconConfig.getHttpClient(), ReconciledDataExtensionJob.httpClient, ReconciledDataExtensionJob.getHttpClient() and the local in GuessTypesOfColumnCommand.postQueries are typed with the interface",
+        "ImportingUtilities and ColumnAdditionByFetchingURLsOperation, which call getResponse and getAsString, are unchanged",
+        "the project compiles"
+      ],
+      "checks": [
+        {
+          "path": "main/src/com/google/refine/util/HttpClient.java",
+          "present": "class\\s+HttpClient\\s+implements\\s+\\w+"
+        },
+        {
+          "path": "main/src/com/google/refine/model/recon/StandardReconConfig.java",
+          "absent": "\\bHttpClient\\s+(?:httpClient\\b|getHttpClient\\()"
+        },
+        {
+          "path": "main/src/com/google/refine/model/recon/ReconciledDataExtensionJob.java",
+          "absent": "\\bHttpClient\\s+(?:httpClient\\b|getHttpClient\\()"
+        },
+        {
+          "path": "main/src/com/google/refine/commands/recon/GuessTypesOfColumnCommand.java",
+          "absent": "\\bHttpClient\\s+client\\b"
+        },
+        {
+          "path": "main/src/com/google/refine/importing/ImportingUtilities.java",
+          "unchanged": true
+        },
+        {
+          "path": "main/src/com/google/refine/operations/column/ColumnAdditionByFetchingURLsOperation.java",
+          "unchanged": true
+        }
+      ],
+      "missing_mcp_tools": [
+        "Extract Interface",
+        "Use Interface Where Possible"
+      ],
+      "verified": false
+    },
+    {
+      "id": "hide-delegate-01-projectmanager-flushlookups",
+      "category": "Hide Delegate",
+      "composition_driver": "goal",
+      "prompt": "The change classes in main/src/com/google/refine/model/changes/ flush the lookup cache for a project column by reaching through the project manager: ProjectManager.singleton.getLookupCacheManager().flushLookupsInvolvingProjectColumn(...). Hide the LookupCacheManager from them: com.google.refine.ProjectManager should offer this operation itself, and no change class should call getLookupCacheManager() to flush a project column. Leave the project-wide flushLookupsInvolvingProject calls as they are.",
+      "known_solutions": [
+        [
+          "Extract Method on the whole call in ColumnRenameChange (line 59), as a static method",
+          "Introduce Parameter on project.id and on _oldColumnName in the extracted method, so it takes (long, String)",
+          "Move Method (static) -> com.google.refine.ProjectManager",
+          "Find and Replace Code Duplicates of the moved method, whole project",
+          "Rename the moved method"
+        ],
+        [
+          "Extract Method on the whole call in CellChange (line 68), replacing the duplicate on line 77",
+          "Introduce Parameter on ProjectManager.singleton in the extracted method",
+          "Move Method (instance, receiver = that parameter) -> com.google.refine.ProjectManager",
+          "Find and Replace Code Duplicates of the moved method, whole project",
+          "Rename the moved method"
+        ]
+      ],
+      "why_not_one_call": "There is no Hide Delegate refactoring in IntelliJ. The delegating method has to be extracted at one call site, generalized so its parameters fit every call site, moved into ProjectManager, and then substituted for the remaining 10 call sites in 5 other classes. Extract Method only replaces duplicates inside its own class, so the other classes need Find and Replace Code Duplicates.",
+      "expected_end_state": [
+        "ProjectManager declares a method taking a project (id or Project) and a column name that calls flushLookupsInvolvingProjectColumn on its LookupCacheManager",
+        "CellChange, ColumnRenameChange, ColumnSplitChange, MassCellChange, MassReconChange and ReconChange call that ProjectManager method and no longer call getLookupCacheManager().flushLookupsInvolvingProjectColumn",
+        "the flushLookupsInvolvingProject calls are unchanged",
+        "the project compiles and tests pass"
+      ],
+      "checks": [
+        {
+          "path": "main/src/com/google/refine/ProjectManager.java",
+          "present": "\\b\\w+\\(\\s*(?:long|Project)\\s+\\w+\\s*,\\s*String\\s+\\w+\\s*\\)\\s*\\{[^}]*flushLookupsInvolvingProjectColumn\\("
+        },
+        {
+          "path": "main/src/com/google/refine/model/changes/CellChange.java",
+          "absent": "getLookupCacheManager\\(\\)\\s*\\.flushLookupsInvolvingProjectColumn"
+        },
+        {
+          "path": "main/src/com/google/refine/model/changes/CellChange.java",
+          "present": "ProjectManager\\.(?:singleton\\.)?\\w+\\(\\s*project\\b"
+        },
+        {
+          "path": "main/src/com/google/refine/model/changes/ColumnRenameChange.java",
+          "absent": "getLookupCacheManager\\(\\)\\s*\\.flushLookupsInvolvingProjectColumn"
+        },
+        {
+          "path": "main/src/com/google/refine/model/changes/ColumnSplitChange.java",
+          "absent": "getLookupCacheManager\\(\\)\\s*\\.flushLookupsInvolvingProjectColumn"
+        },
+        {
+          "path": "main/src/com/google/refine/model/changes/MassCellChange.java",
+          "absent": "getLookupCacheManager\\(\\)\\s*\\.flushLookupsInvolvingProjectColumn"
+        },
+        {
+          "path": "main/src/com/google/refine/model/changes/MassReconChange.java",
+          "absent": "getLookupCacheManager\\(\\)\\s*\\.flushLookupsInvolvingProjectColumn"
+        },
+        {
+          "path": "main/src/com/google/refine/model/changes/ReconChange.java",
+          "absent": "getLookupCacheManager\\(\\)\\s*\\.flushLookupsInvolvingProjectColumn"
+        },
+        {
+          "path": "main/src/com/google/refine/model/changes/MassRowChange.java",
+          "unchanged": true
+        }
+      ],
+      "missing_mcp_tools": [
+        "Introduce Parameter on an expression",
+        "Find and Replace Code Duplicates"
+      ],
+      "verified": false
+    },
+    {
+      "id": "method-object-01-separatorbasedimporter-guessseparator",
+      "category": "Replace Method with Method Object, decomposed",
+      "composition_driver": "goal",
+      "prompt": "SeparatorBasedImporter.guessSeparator(File, String, boolean) in main/src/com/google/refine/importers/SeparatorBasedImporter.java is a long algorithm that is hard to split up because everything is a local variable. Turn it into a method object: a new class that holds the file, the encoding and the quote-handling flag as fields and runs the algorithm in an instance method without parameters. guessSeparator(File, String, boolean) must keep its signature and only delegate to the new class, and its callers must not change.",
+      "known_solutions": [
+        [
+          "Extract Method on the whole body of guessSeparator(File, String, boolean), lines 267-342, as a static method",
+          "Introduce Parameter Object on the extracted method (file, encoding, handleQuotes) -> new class",
+          "Convert to Instance Method on the extracted method -> the new class",
+          "Rename the instance method"
+        ],
+        [
+          "Introduce Parameter Object on guessSeparator(File, String, boolean) with 'keep method as delegate'",
+          "Convert to Instance Method on the delegate target -> the new class"
+        ]
+      ],
+      "why_not_one_call": "Replace Method with Method Object is blocked. Introduce Parameter Object is what turns the parameters into fields of a new class, but applied directly it would change guessSeparator's public signature, so the body has to be split off first (or the delegate option used). The method then still lives in SeparatorBasedImporter and takes the new object as a parameter until Convert to Instance Method moves it in. Turning the locals into fields (Introduce Field per local) is the usual next step but is not graded.",
+      "expected_end_state": [
+        "guessSeparator(File, String, boolean) only returns new <Class>(file, encoding, handleQuotes).<method>()",
+        "the new class has fields for the three parameters and an instance method with no parameters containing the algorithm",
+        "SeparatorBasedImporter has no leftover static method that takes the new object as its only parameter",
+        "guessSeparator(File, String) and all callers are unchanged",
+        "the project compiles and SeparatorBasedImporterTests and LineBasedFormatGuesser tests pass"
+      ],
+      "checks": [
+        {
+          "path": "main/src/com/google/refine/importers/SeparatorBasedImporter.java",
+          "present": "Separator\\s+guessSeparator\\(\\s*File\\s+\\w+\\s*,\\s*String\\s+\\w+\\s*,\\s*boolean\\s+\\w+\\s*\\)\\s*\\{\\s*return\\s+new\\s+\\w+\\([^;]*\\)\\s*\\.\\s*\\w+\\(\\s*\\)\\s*;\\s*\\}"
+        },
+        {
+          "path": "main/src/com/google/refine/importers/SeparatorBasedImporter.java",
+          "absent": "\\bstatic\\b[^\\n{;=]*\\bSeparator\\s+\\w+\\(\\s*[A-Z]\\w*\\s+\\w+\\s*\\)"
+        },
+        {
+          "path": "main/src/com/google/refine/importers/LineBasedFormatGuesser.java",
+          "unchanged": true
+        }
+      ],
+      "missing_mcp_tools": [
+        "Introduce Parameter Object",
+        "Convert to Instance Method"
+      ],
+      "verified": false
+    },
+    {
+      "id": "factory-method-01-multivaluedcellsplit",
+      "category": "Replace Constructor with Factory Method, decomposed",
+      "composition_driver": "goal",
+      "prompt": "MultiValuedCellSplitOperation (main/src/com/google/refine/operations/cell/MultiValuedCellSplitOperation.java) has two public constructors whose only difference is the split mode: by separator, or by field lengths. Replace them with two static factory methods on MultiValuedCellSplitOperation whose names say which mode they create, make both constructors private, and make every caller in the project, including tests, use the factory methods.",
+      "known_solutions": [
+        [
+          "Extract Method on `new MultiValuedCellSplitOperation(columnName, keyColumnName, separator, regex)` in deserialize (line 75), non-private static, named for the separator mode",
+          "Extract Method on `new MultiValuedCellSplitOperation(columnName, keyColumnName, fieldLengths)` in deserialize (line 81), non-private static, named for the lengths mode",
+          "Find and Replace Code Duplicates of the first factory, whole project",
+          "Find and Replace Code Duplicates of the second factory, whole project",
+          "Change Visibility of both constructors -> private"
+        ],
+        [
+          "Extract Method on each `new MultiValuedCellSplitOperation(..)` in SplitMultiValueCellsCommand",
+          "Make Static on both extracted methods",
+          "Move Method (static) both -> MultiValuedCellSplitOperation",
+          "Find and Replace Code Duplicates of both, whole project",
+          "Change Visibility of both constructors -> private"
+        ]
+      ],
+      "why_not_one_call": "Replace Constructor with Factory Method is blocked. Extracting the `new` expression creates the factory, but only in the class where it is extracted, and only that class's duplicates are replaced. Extracting inside the class's own static deserialize method saves the Make Static and Move steps. The callers in SplitMultiValueCellsCommand and MultiValuedCellSplitOperationTests still need Find and Replace Code Duplicates, and the constructors can only become private once no outside caller is left.",
+      "expected_end_state": [
+        "MultiValuedCellSplitOperation declares non-private static factories (String, String, String, boolean) and (String, String, int[])",
+        "both constructors are private",
+        "no `new MultiValuedCellSplitOperation(` remains outside MultiValuedCellSplitOperation",
+        "the project compiles and MultiValuedCellSplitOperationTests passes"
+      ],
+      "checks": [
+        {
+          "path": "main/src/com/google/refine/operations/cell/MultiValuedCellSplitOperation.java",
+          "present": "\\bstatic\\b[ \\t\\w.]*?\\bMultiValuedCellSplitOperation\\s+\\w+\\(\\s*String\\s+\\w+\\s*,\\s*String\\s+\\w+\\s*,\\s*String\\s+\\w+\\s*,\\s*boolean\\s+\\w+\\s*\\)"
+        },
+        {
+          "path": "main/src/com/google/refine/operations/cell/MultiValuedCellSplitOperation.java",
+          "present": "\\bstatic\\b[ \\t\\w.]*?\\bMultiValuedCellSplitOperation\\s+\\w+\\(\\s*String\\s+\\w+\\s*,\\s*String\\s+\\w+\\s*,\\s*int\\[\\]\\s+\\w+\\s*\\)"
+        },
+        {
+          "path": "main/src/com/google/refine/operations/cell/MultiValuedCellSplitOperation.java",
+          "absent": "(?m)^ {4}(?:public\\s+|protected\\s+)?MultiValuedCellSplitOperation\\("
+        },
+        {
+          "path": "main/src/com/google/refine/commands/cell/SplitMultiValueCellsCommand.java",
+          "absent": "new\\s+MultiValuedCellSplitOperation\\("
+        },
+        {
+          "path": "main/tests/server/src/com/google/refine/operations/cell/MultiValuedCellSplitOperationTests.java",
+          "absent": "new\\s+MultiValuedCellSplitOperation\\("
+        }
+      ],
+      "missing_mcp_tools": [
+        "Find and Replace Code Duplicates",
+        "Change Visibility (exists in the fork as uncommitted work)",
+        "Make Static (second solution only)"
       ],
       "verified": false
     }
