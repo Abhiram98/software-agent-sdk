@@ -1,0 +1,120 @@
+{
+  "_schema": {
+    "id": "stable task identifier, used in result filenames",
+    "composition_driver": "always 'goal' here: the feature goal itself requires reusing logic that is trapped inside one method, so an enabling refactoring is needed before the feature can be added without duplication",
+    "prompt": "feature request given to the agent. States a user-facing goal only. Never mentions refactoring, extracting, splitting, or reuse mechanics. This is the thing under test: whether the agent discovers that an enabling refactoring is required",
+    "enabling_refactoring": "grader-only. The extract-method (or similar) step whose absence forces the agent to either duplicate logic or discover the refactoring. Not shown to the agent",
+    "duplication_failure": "grader-only. What a lazy solution does instead (copies the trapped logic into the new code path) and why that is wrong (the two copies drift; the feature's own correctness requirement forbids drift)",
+    "known_solutions": "grader-only. IntelliJ MCP tool sequences that complete the task; order matters. Not exhaustive: any path reaching expected_end_state counts. Unverified until a known solution is run against base_sha",
+    "expected_end_state": "observable properties of the finished code that grading checks, independent of path. Checked against base_sha in manifest.json",
+    "checks": "machine checks for expected_end_state, run by run_eval.py on the final tree: 'present'/'absent' are Python regexes searched in the file at 'path'; 'unchanged' means the file is byte-identical to base_sha. Compilation is checked separately with --build. These are necessary, not sufficient: the drift check in the README is what distinguishes extraction from duplication",
+    "tool_use_signal": "this category is also a probe for whether the agent uses its tools at all. run_eval.py records tool_calls and the refactoring-tool vs direct-edit line split; a correct solution is unreachable without reading and editing real files",
+    "verified": "whether a known solution has been executed against the base commit"
+  },
+  "OpenRefine": [
+    {
+      "id": "feature-extract-01-excel-detected-type-preview",
+      "composition_driver": "goal",
+      "prompt": "In main/src/com/google/refine/importers/ExcelImporter.java, add a way for other code to ask what value a single Excel cell would import as, without going through a full file import and without building a Cell object. Add a static method detectedCellValue(org.apache.poi.ss.usermodel.Cell) that returns that value as a Serializable (or null for a blank or error cell). The value it returns for a cell must always be exactly what a normal import of that same cell produces \u2014 a preview that disagrees with the real import would be worse than none.",
+      "enabling_refactoring": "Extract the Serializable value computation (ExcelImporter.java lines 266-305: the CellType dispatch plus the number/date format heuristics) out of extractCell(Cell) into the new detectedCellValue method, then have extractCell call it and wrap the result. This mirrors the shape OdsImporter already has (extractCellValue feeding extractCell).",
+      "duplication_failure": "A lazy solution copies the type dispatch and format logic from extractCell into a new detectedCellValue. It passes a naive test today, but the 'must equal the real import' requirement is then only true by coincidence: the first change to either copy makes the preview and the import disagree. The drift check (see README) mutates one branch and asserts both paths change together, so duplication fails it.",
+      "known_solutions": [
+        [
+          "extract_method ExcelImporter.java lines 266-305, name=detectedCellValue",
+          "rename_refactoring the extracted method to detectedCellValue if the IDE named it otherwise"
+        ]
+      ],
+      "expected_end_state": [
+        "ExcelImporter declares a static method detectedCellValue taking an org.apache.poi.ss.usermodel.Cell and returning a Serializable",
+        "extractCell(Cell) no longer computes the value inline; it obtains the value from detectedCellValue and wraps it (new Cell(value, null)), returning null when the value is null",
+        "the number/date format dispatch (isDatetimeFormat, isNumberFormat, the General and decimal handling) exists in exactly one place, inside detectedCellValue",
+        "the project compiles and ExcelImporterTests passes"
+      ],
+      "checks": [
+        {
+          "path": "main/src/com/google/refine/importers/ExcelImporter.java",
+          "present": "\\bstatic\\b[ \\t\\w.]*?\\bSerializable\\s+detectedCellValue\\(\\s*org\\.apache\\.poi\\.ss\\.usermodel\\.Cell"
+        },
+        {
+          "path": "main/src/com/google/refine/importers/ExcelImporter.java",
+          "present": "extractCell\\b[\\s\\S]{0,400}?detectedCellValue\\("
+        },
+        {
+          "path": "main/src/com/google/refine/importers/ExcelImporter.java",
+          "present": "detectedCellValue\\b[\\s\\S]{0,1600}?isNumberFormat\\("
+        }
+      ],
+      "verified": false
+    },
+    {
+      "id": "feature-extract-02-exporter-plain-text-value",
+      "composition_driver": "goal",
+      "prompt": "In main/src/com/google/refine/exporters/CustomizableTabularExporterUtilities.java, some downstream tools choke on the link decoration the exporter attaches to cells. Add a way for an exporter to obtain the plain display text of a (non-reconciled) cell value on its own \u2014 add a method on CellFormatter that takes a cell value and returns the display text, with the same String, date, and fallback handling the exporter already uses. The text it returns for a value must be identical to the text the normal exporter puts into the CellData for that same value.",
+      "enabling_refactoring": "Extract the value-to-text conversion (CustomizableTabularExporterUtilities.java lines 359-376: the String-with-URL-detection / OffsetDateTime / toString branch inside format) into its own method on CellFormatter, and have format call it. The URL/link side effect stays in format; only the text derivation moves.",
+      "duplication_failure": "A lazy solution copies the instanceof branch into a new method, leaving format's own copy in place. The 'identical to what format produces' requirement then holds only until the formatting changes in one copy. The drift check mutates the date/string formatting and asserts the decorated and plain-text outputs change together; duplication fails it.",
+      "known_solutions": [
+        [
+          "extract_method CustomizableTabularExporterUtilities.java lines 359-376, name=formatValueText",
+          "introduce_parameter on the value expression if the extracted method does not already take the value",
+          "rename_refactoring the extracted method to formatValueText"
+        ]
+      ],
+      "expected_end_state": [
+        "CellFormatter declares a method that takes the cell value (an Object) and returns the display text String",
+        "format(Project, Column, Cell) derives the non-recon display text by calling that method instead of with its own inline instanceof branch",
+        "the String/OffsetDateTime/toString handling exists in exactly one place",
+        "the project compiles and the customizable tabular exporter tests pass"
+      ],
+      "checks": [
+        {
+          "path": "main/src/com/google/refine/exporters/CustomizableTabularExporterUtilities.java",
+          "present": "\\bString\\s+\\w+\\(\\s*Object\\s+\\w+\\s*\\)"
+        },
+        {
+          "path": "main/src/com/google/refine/exporters/CustomizableTabularExporterUtilities.java",
+          "present": "CellData\\s+format\\([\\s\\S]{0,900}?=\\s*\\w+\\(\\s*value\\s*\\)"
+        },
+        {
+          "path": "main/src/com/google/refine/exporters/CustomizableTabularExporterUtilities.java",
+          "present": "instanceof\\s+OffsetDateTime"
+        }
+      ],
+      "verified": false
+    },
+    {
+      "id": "feature-extract-03-separator-build-parser",
+      "composition_driver": "goal",
+      "prompt": "In main/src/com/google/refine/importers/SeparatorBasedImporter.java, add a way to construct the configured univocity parser (TSV or CSV) from the resolved import options \u2014 separator, quote character, processQuotes, strictQuotes \u2014 and return it as an AbstractParser, so the exact parser an import would use can be built and inspected without reading a file. A parser obtained this way must be configured identically to the one parseOneFile uses for a real import.",
+      "enabling_refactoring": "Extract the parser-construction block (SeparatorBasedImporter.java lines 145-166: the if (tsv) { TsvParser... } else { CsvParser... } settings block) out of parseOneFile into a method that takes the resolved options and returns the AbstractParser, then have parseOneFile call it.",
+      "duplication_failure": "A lazy solution builds a second parser with the same settings in a new method while parseOneFile keeps constructing its own. The 'configured identically' requirement then drifts the first time a setting (maxCharsPerColumn, whitespace flags, quote handling) changes in one place. The drift check changes one parser setting and asserts both the dry-run parser and the real import parser change together; duplication fails it.",
+      "known_solutions": [
+        [
+          "extract_method SeparatorBasedImporter.java lines 145-166, name=buildParser",
+          "introduce_parameter for sep, quote, processQuotes and strictQuotes as needed so the extracted method is self-contained",
+          "rename_refactoring the extracted method to buildParser"
+        ]
+      ],
+      "expected_end_state": [
+        "SeparatorBasedImporter declares a method that returns an AbstractParser built from the separator/quote/processQuotes/strictQuotes options (the tsv-vs-csv decision included)",
+        "parseOneFile obtains its parser from that method instead of constructing TsvParser/CsvParser inline",
+        "the new TsvParser(...) / new CsvParser(...) construction appears in exactly one place",
+        "the project compiles and SeparatorBasedImporterTests passes"
+      ],
+      "checks": [
+        {
+          "path": "main/src/com/google/refine/importers/SeparatorBasedImporter.java",
+          "present": "\\bAbstractParser\\s+\\w+\\("
+        },
+        {
+          "path": "main/src/com/google/refine/importers/SeparatorBasedImporter.java",
+          "present": "parseOneFile\\b[\\s\\S]{0,2600}?=\\s*\\w+\\([^;]*\\)\\s*;[\\s\\S]{0,200}?beginParsing"
+        },
+        {
+          "path": "main/src/com/google/refine/importers/SeparatorBasedImporter.java",
+          "present": "new\\s+CsvParser\\("
+        }
+      ],
+      "verified": false
+    }
+  ]
+}
